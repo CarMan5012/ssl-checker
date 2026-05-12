@@ -1,0 +1,9 @@
+# 状态记录文件（不建议提交，生产环境会自行生成）
+ssl_alert_state.json
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 域名列表（如果您想保护隐私，可以不提交）
+websites_list.txt
