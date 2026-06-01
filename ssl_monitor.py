@@ -491,7 +491,7 @@ if __name__ == '__main__':
     log_system(f"当前系统时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     log_system(f"状态文件路径: {STATE_FILE}")
     
-    # 1. 立即执行一次巡检（内部会自动执行下一次排程并打印日志）
+    # 立即执行一次巡检（内部会自动执行下一次排程并打印日志）
     run_task()
     
     while True:
