@@ -302,7 +302,7 @@ def send_dingtalk_alert(alerts):
         if i > 0:
             text += f"---\n\n"
         days_str = f"{a['days']} 天" if a['days'] is not None else "读取失败"
-        text += f"🌐 **域名:** {a['domain']}\n\n"
+        text += f"🌐 **域名:** <font color='#1E90FF'>{a['domain']}</font>\n\n"
         text += f"📊 **告警等级:** <font color='{a['color']}'>{a['level']}</font>\n\n"
         text += f"⏳ **剩余天数:** <font color='{a['color']}'>**{days_str}**</font>\n\n"
         if a['days'] is not None:
@@ -379,6 +379,14 @@ def run_task():
             # 移除行内注释 (如 example.com # 注释) 以及首尾空白
             clean_line = line.split('#')[0].strip()
             if clean_line:
+                # 过滤协议头 (如 https:// 或 http://)
+                if clean_line.startswith('http://'):
+                    clean_line = clean_line[7:]
+                elif clean_line.startswith('https://'):
+                    clean_line = clean_line[8:]
+                # 去除末尾的路径部分
+                if '/' in clean_line:
+                    clean_line = clean_line.split('/')[0]
                 domains.append(clean_line)
 
     if not domains:
