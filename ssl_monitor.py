@@ -33,30 +33,72 @@ def resolve_path(env_var, default_name):
 LIST_FILE = resolve_path('LIST_FILE', 'websites_list.txt')
 STATE_FILE = resolve_path('STATE_FILE', 'ssl_alert_state.json')
 
-# 其他配置
-SMTP_HOST = os.getenv('SMTP_HOST', '')
-SMTP_PORT = int(os.getenv('SMTP_PORT', 465))
-SMTP_USER = os.getenv('SMTP_USER', '')
-SMTP_PASS = os.getenv('SMTP_PASS', '')
-EMAIL_TO = os.getenv('EMAIL_TO', '')
-DINGTALK_WEBHOOK = os.getenv('DINGTALK_WEBHOOK', '')
-DINGTALK_TOKEN = os.getenv('DINGTALK_TOKEN', '')
-DINGTALK_SECRET = os.getenv('DINGTALK_SECRET', '')
-DINGTALK_KEYWORD = os.getenv('DINGTALK_KEYWORD', '')
+# ---------------------------------------------------------
+# 全局配置加载与管理
+# ---------------------------------------------------------
+CONFIG_FILE = resolve_path('CONFIG_FILE', 'config.json')
 
-# 支持直接填写 Access Token (通过 DINGTALK_TOKEN 或 DINGTALK_WEBHOOK) 进行自动拼接
-if DINGTALK_TOKEN:
-    DINGTALK_WEBHOOK = f"https://oapi.dingtalk.com/robot/send?access_token={DINGTALK_TOKEN}"
-elif DINGTALK_WEBHOOK and not DINGTALK_WEBHOOK.startswith('http'):
-    DINGTALK_WEBHOOK = f"https://oapi.dingtalk.com/robot/send?access_token={DINGTALK_WEBHOOK}"
+# 声明全局配置变量
+SMTP_HOST = ''
+SMTP_PORT = 465
+SMTP_USER = ''
+SMTP_PASS = ''
+EMAIL_TO = ''
+DINGTALK_WEBHOOK = ''
+DINGTALK_TOKEN = ''
+DINGTALK_SECRET = ''
+DINGTALK_KEYWORD = ''
+ALERT_INFO_DAYS = 14
+ALERT_WARNING_DAYS = 7
+ALERT_CRITICAL_DAYS = 3
 
 # 测试模式判断
 TEST_MODE = os.getenv('TEST_MODE', 'false').lower() == 'true' or '--test' in sys.argv
 
-# 告警阈值（天数，可通过环境变量配置）
-ALERT_INFO_DAYS = int(os.getenv('ALERT_INFO_DAYS', '14'))
-ALERT_WARNING_DAYS = int(os.getenv('ALERT_WARNING_DAYS', '7'))
-ALERT_CRITICAL_DAYS = int(os.getenv('ALERT_CRITICAL_DAYS', '3'))
+def load_all_configs():
+    global SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_TO
+    global DINGTALK_WEBHOOK, DINGTALK_TOKEN, DINGTALK_SECRET, DINGTALK_KEYWORD
+    global ALERT_INFO_DAYS, ALERT_WARNING_DAYS, ALERT_CRITICAL_DAYS
+
+    # 1. 尝试从 config.json 文件读取 Web 配置
+    json_config = {}
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                json_config = json.load(f)
+        except Exception:
+            pass
+
+    # 2. 读取优先级：优先 JSON -> 其次环境变量 -> 最后默认值
+    def get_cfg(key, env_var, default_val=''):
+        val = json_config.get(key)
+        if val is None or val == '':
+            return os.getenv(env_var, default_val)
+        return val
+
+    SMTP_HOST = get_cfg('smtp_host', 'SMTP_HOST')
+    SMTP_PORT = int(get_cfg('smtp_port', 'SMTP_PORT', '465'))
+    SMTP_USER = get_cfg('smtp_user', 'SMTP_USER')
+    SMTP_PASS = get_cfg('smtp_pass', 'SMTP_PASS')
+    EMAIL_TO = get_cfg('email_to', 'EMAIL_TO')
+    
+    DINGTALK_WEBHOOK = get_cfg('dingtalk_webhook', 'DINGTALK_WEBHOOK')
+    DINGTALK_TOKEN = get_cfg('dingtalk_token', 'DINGTALK_TOKEN')
+    DINGTALK_SECRET = get_cfg('dingtalk_secret', 'DINGTALK_SECRET')
+    DINGTALK_KEYWORD = get_cfg('dingtalk_keyword', 'DINGTALK_KEYWORD')
+
+    ALERT_INFO_DAYS = int(get_cfg('alert_info_days', 'ALERT_INFO_DAYS', '14'))
+    ALERT_WARNING_DAYS = int(get_cfg('alert_warning_days', 'ALERT_WARNING_DAYS', '7'))
+    ALERT_CRITICAL_DAYS = int(get_cfg('alert_critical_days', 'ALERT_CRITICAL_DAYS', '3'))
+
+    # 钉钉 Token / Webhook 自动拼接规整
+    if DINGTALK_TOKEN:
+        DINGTALK_WEBHOOK = f"https://oapi.dingtalk.com/robot/send?access_token={DINGTALK_TOKEN}"
+    elif DINGTALK_WEBHOOK and not DINGTALK_WEBHOOK.startswith('http'):
+        DINGTALK_WEBHOOK = f"https://oapi.dingtalk.com/robot/send?access_token={DINGTALK_WEBHOOK}"
+
+# 首次初始化加载
+load_all_configs()
 
 # 告警等级权重（用于判断是否“升级”）
 LEVEL_WEIGHT = {
@@ -174,12 +216,18 @@ def check_ssl_expiry(domain_with_port):
         try:
             # 优先使用 cryptography 42.0.0+ 推荐的 timezone-aware 接口
             expire_date = cert.not_valid_after_utc
-            remaining = expire_date - datetime.datetime.now(datetime.timezone.utc)
+            expire_ts = expire_date.timestamp()
         except AttributeError:
             # 向后兼容旧版本 cryptography
             expire_date = cert.not_valid_after
-            remaining = expire_date - datetime.datetime.utcnow()
-        return remaining.days, expire_date.strftime('%Y-%m-%d %H:%M:%S')
+            expire_ts = expire_date.replace(tzinfo=datetime.timezone.utc).timestamp()
+
+        # 转换为本地时区时间
+        expire_local = datetime.datetime.fromtimestamp(expire_ts)
+        now_local = datetime.datetime.now()
+        remaining = expire_local - now_local
+
+        return remaining.days, expire_local.strftime('%Y-%m-%d %H:%M:%S')
 
     except Exception as e:
         error_msg = str(e).split('] ')[-1]
@@ -358,6 +406,7 @@ def check_is_workday():
 # ---------------------------------------------------------
 def run_task():
     global LAST_RUN_DATE
+    load_all_configs()
     today_str = datetime.date.today().isoformat()
     
     # 生产模式下，如果今天已经运行过，则跳过重复触发
