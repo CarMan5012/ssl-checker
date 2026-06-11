@@ -1,6 +1,6 @@
-# 🛡️ SSL-Monitor: 证书到期巡检告警工具
+# 🛡️ SSL-Checker: 证书到期巡检告警工具
 
-`SSL-Monitor` 是一款轻量化 SSL 证书巡检工具。升级后支持**全新高颜值的 Web 可视化管理控制台**，内置密码登录与首次注册会话校验、告警配置热保存、域名批量粘贴导入以及时区自动对齐等高级功能，在确保不遗漏风险的同时，最大限度减少非必要消息的骚扰。
+`SSL-Checker` 是一款轻量化 SSL 证书巡检工具。升级后支持**全新高颜值的 Web 可视化管理控制台**，内置密码登录与首次注册会话校验、告警配置热保存、域名批量粘贴导入以及时区自动对齐等高级功能，在确保不遗漏风险的同时，最大限度减少非必要消息的骚扰。
 
 ---
 
@@ -45,17 +45,17 @@ EOF
 > 4. **支持注释管理**：支持以 `#` 形式在行尾添加行内备注，或者单独成行作为整行注释，方便记录域名用途。
 
 ### 2. 生产环境部署（双服务运行，推荐）
-挂载整个配置目录并映射 `8080` 端口。容器启动后会自动在后台拉起定时巡检任务（`ssl_monitor.py`），同时在前台提供 Web 可视化管理控制台（`web_server.py`）。
+挂载整个配置目录并映射 `8080` 端口。容器启动时会执行主入口程序（`src/main.py`），它会在后台拉起定时巡检守护线程，同时运行 Web 可视化管理控制台服务。
 所有告警及发信配置直接在启动后的 Web 控制台中配置保存：
 
 ```bash
 docker run -d \
-  --name ssl-monitor \
+  --name ssl-checker \
   --restart always \
   -p 8080:8080 \
   -v $(pwd)/conf:/app/conf \
   -e TZ=Asia/Shanghai \
-  carman5012/ssl-monitor:v1.0.1
+  carman5012/ssl-checker:v1.0.1
 ```
 
 > [!WARNING]
@@ -73,7 +73,7 @@ docker run --rm \
   -e DINGTALK_TOKEN="您的钉钉Token" \
   -e DINGTALK_SECRET="您的加签Secret(可选)" \
   -e DINGTALK_KEYWORD="您的关键词(可选)" \
-  carman5012/ssl-monitor:v1.0.1
+  carman5012/ssl-checker:v1.0.1
 ```
 
 ---
@@ -97,7 +97,7 @@ docker run --rm \
 | `ALERT_WARNING_DAYS` | 否 | `7` | 警告告警阈值（天数，少于或等于该值触发警告） |
 | `ALERT_CRITICAL_DAYS`| 否 | `3` | 严重告警阈值（天数，少于或等于该值触发严重） |
 | `TZ` | 否 | `Asia/Shanghai` | 时区设置，强烈建议设为北京时间 |
-| `WEB_PORT` | 否 | `8080` | 前端 Web 管理端启动时的监听端口（仅在运行 web_server.py 时生效） |
+| `WEB_PORT` | 否 | `8080` | 前端 Web 管理端启动时的监听端口（仅在运行 src/main.py 时生效） |
 
 ---
 
