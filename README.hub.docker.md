@@ -49,7 +49,8 @@ docker run -d \
 
 > [!WARNING]
 > **💻 生产环境传输安全建议**：
-> Flask 控制台默认运行在 HTTP 协议下，建议在前端使用 Nginx / Caddy 挂载 **HTTPS/SSL 证书** 进行加密代理传输。在部署 HTTPS 后，建议修改 `src/app.py` 中 `app.config.update` 配置，启用 `SESSION_COOKIE_SECURE=True` 以强制限制 Cookie 仅在安全信道中传输。
+> 控制台默认运行在 HTTP 协议下，建议在前端使用 Nginx / Caddy 挂载 **HTTPS/SSL 证书** 进行加密代理传输。
+> **关于传输安全 (Secure Cookie)**：本系统已内置**动态 SSL 探测机制**，会自动判断用户请求是否为 HTTPS 或经过反向代理（检查 `X-Forwarded-Proto` 头），并自动启用或禁用 `SESSION_COOKIE_SECURE` 安全属性。因此您无需手动修改任何代码，系统在 HTTP 和 HTTPS 模式下均能实现完美兼容与安全隔离。
 
 ### 3. 测试模式（立即运行并退出）
 添加 `-e TEST_MODE=true` 环境变量开启测试模式。开启后，容器会立即启动一次巡检，并向钉钉/邮箱发送带 `[TEST]` 前缀的测试告警，且不会把这次告警记录到状态文件中，非常适合用来测试网络连接和配置：

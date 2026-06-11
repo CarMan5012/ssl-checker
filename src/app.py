@@ -5,18 +5,32 @@ import time
 import datetime
 from datetime import timedelta
 from flask import Flask, request, jsonify, session, redirect
+from flask.sessions import SecureCookieSessionInterface
 
 import src.utils.config as config
 from src.utils.logger import log_info, log_ok, log_warn, log_alert, log_error
 from src.utils.file_io import atomic_write_file
 from src.utils.cert import check_ssl
 
+class DynamicSecureSessionInterface(SecureCookieSessionInterface):
+    def get_cookie_secure(self, app):
+        val = app.config.get('SESSION_COOKIE_SECURE')
+        if val is not None:
+            return val
+        try:
+            # 兼容：如果当前请求是 HTTPS，或者处于反向代理 HTTPS 后面，则使用 Secure Cookie
+            return request.is_secure or request.headers.get('X-Forwarded-Proto', '').lower() == 'https'
+        except Exception:
+            return False
+
 app = Flask(__name__)
+app.session_interface = DynamicSecureSessionInterface()
 
 # 配置 Session cookie 安全属性
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=None,  # 设为 None，由 DynamicSecureSessionInterface 动态决定
     PERMANENT_SESSION_LIFETIME=timedelta(hours=2)
 )
 
