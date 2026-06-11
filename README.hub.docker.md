@@ -44,7 +44,7 @@ docker run -d \
   -p 8080:8080 \
   -v $(pwd)/conf:/app/conf \
   -e TZ=Asia/Shanghai \
-  carman5012/ssl-checker:v1.0.1
+  carman5012/ssl-checker:latest
 ```
 
 > [!TIP]
@@ -68,7 +68,7 @@ docker run --rm \
   -e DINGTALK_TOKEN="您的钉钉Token" \
   -e DINGTALK_SECRET="您的加签Secret(可选)" \
   -e DINGTALK_KEYWORD="您的自定义关键词(可选)" \
-  carman5012/ssl-checker:v1.0.1
+  carman5012/ssl-checker:latest
 ```
 ---
 

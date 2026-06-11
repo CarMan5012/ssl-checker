@@ -44,7 +44,7 @@ EOF
 > 3. **自动去除协议头和后缀路径**：如果您输入了完整的 URL（例如 `https://github.com/path/to/page`），脚本会自动剥离并识别为 `github.com`；如果带端口（如 `https://my-site.local:8443/api`），则自动识别为 `my-site.local:8443`。
 > 4. **支持注释管理**：支持以 `#` 形式在行尾添加行内备注，或者单独成行作为整行注释，方便记录域名用途。
 
-### 2. 生产环境部署（双服务运行，推荐）
+### 2. 生产环境部署（推荐）
 挂载整个配置目录并映射 `8080` 端口。容器启动时会执行主入口程序（`src/main.py`），它会在后台拉起定时巡检守护线程，同时运行 Web 可视化管理控制台服务。
 所有告警及发信配置（如发信邮箱、收件人、钉钉机器人等）可以直接在启动后的 Web 控制台设置面板中配置与保存，配置立即生效且无需重启容器：
 
@@ -55,7 +55,7 @@ docker run -d \
   -p 8080:8080 \
   -v $(pwd)/conf:/app/conf \
   -e TZ=Asia/Shanghai \
-  carman5012/ssl-checker:v1.0.1
+  carman5012/ssl-checker:latest
 ```
 
 > [!TIP]
@@ -79,7 +79,7 @@ docker run --rm \
   -e DINGTALK_TOKEN="您的钉钉Token" \
   -e DINGTALK_SECRET="您的加签Secret(可选)" \
   -e DINGTALK_KEYWORD="您的关键词(可选)" \
-  carman5012/ssl-checker:v1.0.1
+  carman5012/ssl-checker:latest
 ```
 
 ---
