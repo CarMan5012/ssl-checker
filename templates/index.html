@@ -1263,8 +1263,8 @@
                     <i data-lucide="bar-chart-3" style="width: 14px; height: 14px;"></i>
                     <span>监控看板</span>
                 </button>
-                <button class="nav-item" onclick="navigate('/dashboard/database')" id="nav-database" style="display: none;">
-                    <i data-lucide="database" style="width: 14px; height: 14px;"></i>
+                <button class="nav-item" onclick="navigate('/dashboard/domains')" id="nav-domains" style="display: none;">
+                    <i data-lucide="globe" style="width: 14px; height: 14px;"></i>
                     <span>域名管理</span>
                 </button>
             </nav>
@@ -1392,7 +1392,7 @@
         </div>
 
         <!-- 2. 域名管理视图 -->
-        <div id="view-database" class="route-view">
+        <div id="view-domains" class="route-view">
             <div class="glass-card" style="padding: 0; overflow: hidden;">
                 <!-- 管理工具栏 -->
                 <div class="toolbar">
@@ -1699,7 +1699,7 @@
             }
 
             // 受保护页面列表（未登录时强制弹出登录锁屏）
-            const protectedPaths = ['/dashboard/database', '/dashboard/settings'];
+            const protectedPaths = ['/dashboard/domains', '/dashboard/settings'];
 
             // 安全阻断：未登录状态下，访问受保护路径强制切换到 /login
             if (!loggedIn) {
@@ -1730,7 +1730,7 @@
                 document.getElementById('refreshBtn').style.display = 'none';
                 document.getElementById('settingsBtn').style.display = 'none';
                 document.getElementById('logoutBtn').style.display = 'none';
-                document.getElementById('nav-database').style.display = 'none';
+                document.getElementById('nav-domains').style.display = 'none';
                 showAuthOverlay();
             } else {
                 hideAuthOverlay();
@@ -1740,7 +1740,7 @@
                     document.getElementById('navMenu').classList.add('show');
                     document.getElementById('loginEntranceBtn').style.display = 'none';
                     document.getElementById('nav-dashboard').style.display = 'inline-flex';
-                    document.getElementById('nav-database').style.display = 'inline-flex';
+                    document.getElementById('nav-domains').style.display = 'inline-flex';
                     document.getElementById('refreshBtn').style.display = 'inline-flex';
                     document.getElementById('settingsBtn').style.display = 'inline-flex';
                     document.getElementById('logoutBtn').style.display = 'inline-flex';
@@ -1749,7 +1749,7 @@
                     document.getElementById('navMenu').classList.remove('show');
                     document.getElementById('loginEntranceBtn').style.display = 'inline-flex';
                     document.getElementById('nav-dashboard').style.display = 'none';
-                    document.getElementById('nav-database').style.display = 'none';
+                    document.getElementById('nav-domains').style.display = 'none';
                     document.getElementById('refreshBtn').style.display = 'none';
                     document.getElementById('settingsBtn').style.display = 'none';
                     document.getElementById('logoutBtn').style.display = 'none';
@@ -1763,14 +1763,14 @@
                     closeSettingsDrawerDOM();
 
                     // 切换主页面路由视图 (监控看板 vs 域名管理)
-                    const views = ['dashboard', 'database'];
+                    const views = ['dashboard', 'domains'];
                     views.forEach(v => {
                         const el = document.getElementById(`view-${v}`);
                         if (targetPath === `/dashboard/${v}` || (targetPath === '/dashboard' && v === 'dashboard')) {
                             el.classList.add('active');
                             highlightNavItem(targetPath);
                             if (v === 'dashboard') lastActivePath = '/dashboard';
-                            else lastActivePath = '/dashboard/database';
+                            else lastActivePath = '/dashboard/domains';
                         } else {
                             el.classList.remove('active');
                         }
@@ -1786,7 +1786,7 @@
         function highlightNavItem(path) {
             const items = {
                 '/dashboard': 'nav-dashboard',
-                '/dashboard/database': 'nav-database',
+                '/dashboard/domains': 'nav-domains',
                 '/dashboard/settings': 'nav-settings'
             };
             Object.keys(items).forEach(k => {
@@ -1968,7 +1968,7 @@
             if (savedTheme) {
                 theme = savedTheme;
             } else {
-                theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+                theme = 'light';
             }
             applyTheme();
         }
@@ -2032,7 +2032,11 @@
                 return;
             }
             const parsed = parseDomain(value);
-            if (domainRegex.test(parsed.host)) {
+            const isDomainOrIpv4 = domainRegex.test(parsed.host);
+            const colonCount = (parsed.host.match(/:/g) || []).length;
+            const isIpv6 = /^[0-9a-fA-F:]+$/.test(parsed.host) && colonCount >= 2 && colonCount <= 7;
+
+            if (isDomainOrIpv4 || isIpv6) {
                 inputField.classList.remove('invalid');
                 isInputValid = true;
             } else {
@@ -2046,10 +2050,41 @@
             if (clean.indexOf("http://") === 0) clean = clean.substring(7);
             else if (clean.indexOf("https://") === 0) clean = clean.substring(8);
             if (clean.indexOf("/") !== -1) clean = clean.split("/")[0];
-            if (clean.indexOf(":") !== -1) {
-                let parts = clean.split(":");
-                return { host: parts[0], port: parts[1] };
+            
+            // 处理带方括号的 IPv6 地址，例如 [2001:db8::1]:443 或 [2001:db8::1]
+            if (clean.startsWith("[")) {
+                const endBracket = clean.indexOf("]");
+                if (endBracket !== -1) {
+                    const host = clean.substring(1, endBracket);
+                    let port = "443";
+                    const portPart = clean.substring(endBracket + 1);
+                    if (portPart.startsWith(":")) {
+                        const p = parseInt(portPart.substring(1));
+                        if (!isNaN(p)) {
+                            port = p.toString();
+                        }
+                    }
+                    return { host, port };
+                }
             }
+
+            // 处理普通 IPv6 地址，包含多个冒号且无方括号
+            const colonCount = (clean.match(/:/g) || []).length;
+            if (colonCount > 1) {
+                const lastColon = clean.lastIndexOf(":");
+                const lastPart = clean.substring(lastColon + 1);
+                if (/^\d+$/.test(lastPart)) {
+                    return { host: clean.substring(0, lastColon), port: lastPart };
+                }
+                return { host: clean, port: "443" };
+            }
+
+            // 普通域名/IPv4 且带端口，例如 example.com:8080 或 127.0.0.1:8080
+            if (clean.indexOf(":") !== -1) {
+                const parts = clean.split(":");
+                return { host: parts[0], port: parts[1] || "443" };
+            }
+
             return { host: clean, port: "443" };
         }
 
@@ -2264,9 +2299,13 @@
                         else if (ssl.level === '严重') { badgeClass = 'badge-crit'; daysClass = 'days-crit'; }
                     }
 
+                    const ipText = ssl.ip ? `<div style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-top: 2px;">${ssl.ip}</div>` : '';
                     return `
                         <tr>
-                            <td class="domain-cell">${parsed.host}</td>
+                            <td class="domain-cell">
+                                <div>${parsed.host}</div>
+                                ${ipText}
+                            </td>
                             <td class="port-cell">${parsed.port}</td>
                             <td>
                                 <span class="badge ${badgeClass}">
@@ -2317,9 +2356,13 @@
                         else if (ssl.level === '严重') { badgeClass = 'badge-crit'; daysClass = 'days-crit'; }
                     }
 
+                    const ipText = ssl.ip ? `<div style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-top: 2px;">${ssl.ip}</div>` : '';
                     return `
                         <tr id="row-${btoa(item.domain).replace(/=/g, '')}">
-                            <td class="domain-cell">${parsed.host}</td>
+                            <td class="domain-cell">
+                                <div>${parsed.host}</div>
+                                ${ipText}
+                            </td>
                             <td class="port-cell">${parsed.port}</td>
                             <td>
                                 <span class="badge ${badgeClass}">

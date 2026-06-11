@@ -6,6 +6,7 @@
 
 ## ✨ 核心特性
 
+- **完美支持 IPv6 域名/IP**：前后端及解析底层完全打通并适配 IPv6 格式地址（如 `[2001:db8::1]:443` 或无方括号的 `2001:db8::1`），支持 IPv6 (AAAA) 的解析与检测，前端校验与清洗机制完全兼容。
 - **可视化告警配置中心**：支持直接在网页端配置/修改发信 SMTP 邮箱参数（支持多收信箱）、钉钉机器人参数（Webhook、签名密钥、关键词）以及告警天数阈值。配置实时热生效，定时巡检服务自动读取配置，无需重启容器。
 - **控制台多用户认证 (SPA 锁屏)**：基于 Cookie-Session 安全认证体系与 `@app.before_request` 路由过滤，未授权访问自动唤起毛玻璃锁屏。密码采用随机 Salt + SHA256 安全哈希存储在 `users.json` 中，确保安全性。支持首次运行无用户时自动切换到“管理员首次注册”初始化流程。
 - **批量域名导入**：提供专门的多行 Textarea 对话框，自动清洗输入（自动分割换行、剥离 `# 行内注释`、`http/https` 协议头和尾部路径）并对已有域名去重，极大地提升了添加域名的效率。
@@ -29,7 +30,7 @@ cat <<EOF > ./conf/websites_list.txt
 # 每一行填写一个域名，支持端口与行内注释
 example.com                   # 默认检测 443 端口
 https://www.baidu.com         # 协议前缀与后缀会自动剥离
-my-custom-port.com:8443       # 支持非 443 自定义端口
+[2001:db8::1]:8443            # 支持自定义端口且完全支持 IPv6 域名与解析
 EOF
 ```
 
@@ -43,8 +44,12 @@ docker run -d \
   -p 8080:8080 \
   -v $(pwd)/conf:/app/conf \
   -e TZ=Asia/Shanghai \
-  carman5012/ssl-monitor:v1.0.0
+  carman5012/ssl-monitor:v1.0.1
 ```
+
+> [!WARNING]
+> **💻 生产环境传输安全建议**：
+> Flask 控制台默认运行在 HTTP 协议下，建议在前端使用 Nginx / Caddy 挂载 **HTTPS/SSL 证书** 进行加密代理传输。在部署 HTTPS 后，建议修改 `src/app.py` 中 `app.config.update` 配置，启用 `SESSION_COOKIE_SECURE=True` 以强制限制 Cookie 仅在安全信道中传输。
 
 ### 3. 测试模式（立即运行并退出）
 添加 `-e TEST_MODE=true` 环境变量开启测试模式。开启后，容器会立即启动一次巡检，并向钉钉/邮箱发送带 `[TEST]` 前缀的测试告警，且不会把这次告警记录到状态文件中，非常适合用来测试网络连接和配置：
@@ -56,7 +61,7 @@ docker run --rm \
   -e DINGTALK_TOKEN="您的钉钉Token" \
   -e DINGTALK_SECRET="您的加签Secret(可选)" \
   -e DINGTALK_KEYWORD="您的自定义关键词(可选)" \
-  carman5012/ssl-monitor:v1.0.0
+  carman5012/ssl-monitor:v1.0.1
 ```
 ---
 
