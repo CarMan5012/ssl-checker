@@ -544,24 +544,18 @@ def test_settings_dingtalk():
     webhook = data.get('dingtalk_webhook', '').strip()
     secret = data.get('dingtalk_secret', '')
     keyword = data.get('dingtalk_keyword', '').strip()
-    alert_use_emoji = data.get('alert_use_emoji', False)
     
     if not webhook:
         return jsonify({"error": "Webhook 地址不能为空"}), 400
         
-    emoji_shield = "🛡️ " if alert_use_emoji else ""
-    emoji_ok = "✅ " if alert_use_emoji else ""
-    
+    # 简短 markdown 测试消息（不含 Emoji）
     time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
+    text_content = f"如果您能收到本条消息，说明您的钉钉机器人参数已成功连通！\n发送时间: {time_str}"
     payload = {
         "msgtype": "markdown",
         "markdown": {
-            "title": "SSL证书监控测试消息",
-            "text": f"### {emoji_shield}SSL 证书到期监控系统测试消息\n\n"
-                    f"{emoji_ok}如果您能收到本条消息，说明您的钉钉机器人参数已成功连通！\n\n"
-                    f"---\n\n"
-                    f"📅 **发送时间:** {time_str}"
+            "title": "测试",
+            "text": text_content
         }
     }
     
@@ -585,7 +579,6 @@ def test_settings_email():
     user = data.get('smtp_user', '').strip()
     password = data.get('smtp_pass', '')
     email_to = data.get('email_to', '').strip()
-    alert_use_emoji = data.get('alert_use_emoji', False)
     
     if not host or not user or not email_to:
         return jsonify({"error": "SMTP 服务器、发信账号和收件人不能为空"}), 400
@@ -603,25 +596,15 @@ def test_settings_email():
                 pass
         password = old_cfg.get('smtp_pass', '')
         
-    subject = "【测试】SSL 证书到期监控测试邮件"
-    emoji = "🚨 " if alert_use_emoji else ""
+    # 纯文本测试邮件（不含 Emoji）
     time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    html = f"""
-    <html>
-      <body style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-        <h3>{emoji}SSL 证书到期监控系统测试邮件</h3>
-        <p style="font-size: 14px;">如果您收到这封邮件，说明您的 SMTP 服务器发信配置正确且已成功连通！</p>
-        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
-        <p style="font-size: 12px; color: #888;">📅 发送时间：{time_str}</p>
-      </body>
-    </html>
-    """
+    subject = "【测试】邮件连通性"
+    text_body = f"如果您收到这封邮件，说明您的 SMTP 服务器发信配置正确且已成功连通！\n发送时间: {time_str}"
     
     msg = MIMEMultipart()
     msg['From'], msg['To'] = user, email_to
     msg['Subject'] = subject
-    msg.attach(MIMEText(html, 'html', 'utf-8'))
+    msg.attach(MIMEText(text_body, 'plain', 'utf-8'))
     
     try:
         server = smtplib.SMTP_SSL(host, port) if port in [465, 994] else smtplib.SMTP(host, port)

@@ -119,12 +119,11 @@ def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
         if data.get("msgtype") == "markdown" and "markdown" in data:
             text = data["markdown"].get("text", "")
             if kw not in text:
-                data["markdown"]["text"] = f"{text}\n\n📌 匹配关键词：{kw}"
+                data["markdown"]["text"] = f"{text}\n\n匹配关键词：{kw}"
         elif data.get("msgtype") == "text" and "text" in data:
             content = data["text"].get("content", "")
             if kw not in content:
-                data["text"]["content"] = f"{content}\n📌 匹配关键词：{kw}"
-
+                data["text"]["content"] = f"{content}\n匹配关键词：{kw}"
     # 签名计算 (加签)
     url = wh
     if sec:
