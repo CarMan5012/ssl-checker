@@ -1518,10 +1518,13 @@
                                 </button>
                             </div>
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" style="margin-bottom: 8px;">
                             <label class="form-label">自定义关键词 Keyword (可选)</label>
                             <input type="text" id="cfg_dingtalk_keyword" class="input-field" style="padding-left:12px;" placeholder="机器人安全选项里设置的自定义字符">
                         </div>
+                        <button class="btn btn-secondary" type="button" id="testDingtalkBtn" onclick="testDingtalk()" style="width: 100%; font-size: 12px; height: 32px; padding: 0;">
+                            <i data-lucide="send" style="width: 12px; height: 12px; margin-right: 4px;"></i>测试钉钉发送
+                        </button>
                     </div>
 
                     <!-- 邮件告警 -->
@@ -1577,6 +1580,9 @@
                                 <span></span>
                             </div>
                         </div>
+                        <button class="btn btn-secondary" type="button" id="testEmailBtn" onclick="testEmail()" style="width: 100%; font-size: 12px; height: 32px; padding: 0;">
+                            <i data-lucide="mail" style="width: 12px; height: 12px; margin-right: 4px;"></i>测试邮件发送
+                        </button>
                     </div>
 
                     <!-- 告警天数阈值 -->
@@ -2904,6 +2910,96 @@
             } finally {
                 saveBtn.disabled = false;
                 saveBtn.textContent = "保存配置";
+            }
+        }
+
+        async function testDingtalk() {
+            const webhook = document.getElementById('cfg_dingtalk_webhook').value.trim();
+            if (!webhook) {
+                showToast("请先输入 Webhook 地址！", "error");
+                return;
+            }
+            
+            const btn = document.getElementById('testDingtalkBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="loader" class="spin" style="width: 12px; height: 12px; margin-right: 4px;"></i>测试中...';
+            lucide.createIcons();
+            
+            try {
+                const res = await apiFetch("/api/settings/test/dingtalk", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        dingtalk_webhook: webhook,
+                        dingtalk_secret: document.getElementById('cfg_dingtalk_secret').value,
+                        dingtalk_keyword: document.getElementById('cfg_dingtalk_keyword').value.trim(),
+                        alert_use_emoji: document.getElementById('cfg_alert_use_emoji').checked
+                    })
+                });
+                if (!res) return;
+                
+                const data = await res.json();
+                if (res.ok) {
+                    showToast("钉钉测试消息发送成功，请在群聊中确认！");
+                } else {
+                    showToast(`测试失败: ${data.error}`, "error");
+                }
+            } catch (e) {
+                if (e.message !== "Unauthorized") {
+                    showToast("请求异常，请检查网络", "error");
+                }
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="send" style="width: 12px; height: 12px; margin-right: 4px;"></i>测试钉钉发送';
+                lucide.createIcons();
+            }
+        }
+
+        async function testEmail() {
+            const host = document.getElementById('cfg_smtp_host').value.trim();
+            const portRaw = document.getElementById('cfg_smtp_port').value.trim();
+            const user = document.getElementById('cfg_smtp_user').value.trim();
+            const emailTo = document.getElementById('cfg_email_to').value.trim();
+            
+            if (!host || !portRaw || !user || !emailTo) {
+                showToast("请先完整填写 SMTP 服务器、端口、账号和收件人！", "error");
+                return;
+            }
+            
+            const btn = document.getElementById('testEmailBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="loader" class="spin" style="width: 12px; height: 12px; margin-right: 4px;"></i>测试中...';
+            lucide.createIcons();
+            
+            try {
+                const res = await apiFetch("/api/settings/test/email", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        smtp_host: host,
+                        smtp_port: parseInt(portRaw) || 465,
+                        smtp_user: user,
+                        smtp_pass: document.getElementById('cfg_smtp_pass').value,
+                        email_to: emailTo,
+                        alert_use_emoji: document.getElementById('cfg_alert_use_emoji').checked
+                    })
+                });
+                if (!res) return;
+                
+                const data = await res.json();
+                if (res.ok) {
+                    showToast("邮件测试发送成功，请查收邮箱！");
+                } else {
+                    showToast(`测试失败: ${data.error}`, "error");
+                }
+            } catch (e) {
+                if (e.message !== "Unauthorized") {
+                    showToast("请求异常，请检查网络", "error");
+                }
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="mail" style="width: 12px; height: 12px; margin-right: 4px;"></i>测试邮件发送';
+                lucide.createIcons();
             }
         }
 

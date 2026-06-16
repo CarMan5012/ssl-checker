@@ -536,3 +536,101 @@ def save_settings():
         return jsonify({"success": True})
     else:
         return jsonify({"error": "保存配置失败"}), 500
+
+# 12. 测试钉钉机器人连接状态
+@app.route('/api/settings/test/dingtalk', methods=['POST'])
+def test_settings_dingtalk():
+    data = request.get_json() or {}
+    webhook = data.get('dingtalk_webhook', '').strip()
+    secret = data.get('dingtalk_secret', '')
+    keyword = data.get('dingtalk_keyword', '').strip()
+    alert_use_emoji = data.get('alert_use_emoji', False)
+    
+    if not webhook:
+        return jsonify({"error": "Webhook 地址不能为空"}), 400
+        
+    emoji_shield = "🛡️ " if alert_use_emoji else ""
+    emoji_ok = "✅ " if alert_use_emoji else ""
+    
+    time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": "SSL证书监控测试消息",
+            "text": f"### {emoji_shield}SSL 证书到期监控系统测试消息\n\n"
+                    f"{emoji_ok}如果您能收到本条消息，说明您的钉钉机器人参数已成功连通！\n\n"
+                    f"---\n\n"
+                    f"📅 **发送时间:** {time_str}"
+        }
+    }
+    
+    from src.monitor import post_to_dingtalk
+    success, msg = post_to_dingtalk(payload, webhook=webhook, secret=secret, keyword=keyword)
+    if success:
+        return jsonify({"success": True})
+    else:
+        return jsonify({"error": msg}), 500
+
+# 13. 测试 SMTP 邮箱连通状态
+@app.route('/api/settings/test/email', methods=['POST'])
+def test_settings_email():
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    data = request.get_json() or {}
+    host = data.get('smtp_host', '').strip()
+    port = int(data.get('smtp_port', '465'))
+    user = data.get('smtp_user', '').strip()
+    password = data.get('smtp_pass', '')
+    email_to = data.get('email_to', '').strip()
+    alert_use_emoji = data.get('alert_use_emoji', False)
+    
+    if not host or not user or not email_to:
+        return jsonify({"error": "SMTP 服务器、发信账号和收件人不能为空"}), 400
+        
+    # 处理密码掩码
+    if password == '******':
+        # 从磁盘读取历史密码
+        old_cfg = {}
+        if os.path.exists(config.CONFIG_FILE):
+            try:
+                import json
+                with open(config.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    old_cfg = json.load(f)
+            except Exception:
+                pass
+        password = old_cfg.get('smtp_pass', '')
+        
+    subject = "【测试】SSL 证书到期监控测试邮件"
+    emoji = "🚨 " if alert_use_emoji else ""
+    time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    html = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+        <h3>{emoji}SSL 证书到期监控系统测试邮件</h3>
+        <p style="font-size: 14px;">如果您收到这封邮件，说明您的 SMTP 服务器发信配置正确且已成功连通！</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+        <p style="font-size: 12px; color: #888;">📅 发送时间：{time_str}</p>
+      </body>
+    </html>
+    """
+    
+    msg = MIMEMultipart()
+    msg['From'], msg['To'] = user, email_to
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html, 'html', 'utf-8'))
+    
+    try:
+        server = smtplib.SMTP_SSL(host, port) if port in [465, 994] else smtplib.SMTP(host, port)
+        if port not in [465, 994]:
+            server.starttls()
+        server.login(user, password)
+        recipients = [email.strip() for email in email_to.split(',') if email.strip()]
+        server.sendmail(user, recipients, msg.as_string())
+        server.quit()
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

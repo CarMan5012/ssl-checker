@@ -102,27 +102,35 @@ def send_email_alert(alerts):
     except Exception as e:
         log_error(f"邮件发送失败: {e}")
 
-def post_to_dingtalk(data):
-    if not config.DINGTALK_WEBHOOK: 
-        return
+def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
+    wh = webhook if webhook is not None else config.DINGTALK_WEBHOOK
+    sec = secret if secret is not None else config.DINGTALK_SECRET
+    kw = keyword if keyword is not None else config.DINGTALK_KEYWORD
+    
+    if not wh: 
+        return False, "钉钉 Webhook 地址未配置"
+    
+    # 自动在 Webhook 只有 token 的情况下补全 URL
+    if wh and not wh.startswith('http'):
+        wh = f"https://oapi.dingtalk.com/robot/send?access_token={wh}"
     
     # 自动注入自定义关键词（如果未在内容中出现）
-    if config.DINGTALK_KEYWORD:
+    if kw:
         if data.get("msgtype") == "markdown" and "markdown" in data:
             text = data["markdown"].get("text", "")
-            if config.DINGTALK_KEYWORD not in text:
-                data["markdown"]["text"] = f"{text}\n\n📌 匹配关键词：{config.DINGTALK_KEYWORD}"
+            if kw not in text:
+                data["markdown"]["text"] = f"{text}\n\n📌 匹配关键词：{kw}"
         elif data.get("msgtype") == "text" and "text" in data:
             content = data["text"].get("content", "")
-            if config.DINGTALK_KEYWORD not in content:
-                data["text"]["content"] = f"{content}\n📌 匹配关键词：{config.DINGTALK_KEYWORD}"
+            if kw not in content:
+                data["text"]["content"] = f"{content}\n📌 匹配关键词：{kw}"
 
     # 签名计算 (加签)
-    url = config.DINGTALK_WEBHOOK
-    if config.DINGTALK_SECRET:
+    url = wh
+    if sec:
         timestamp = str(round(time.time() * 1000))
-        secret_enc = config.DINGTALK_SECRET.encode('utf-8')
-        string_to_sign = '{}\n{}'.format(timestamp, config.DINGTALK_SECRET)
+        secret_enc = sec.encode('utf-8')
+        string_to_sign = '{}\n{}'.format(timestamp, sec)
         string_to_sign_enc = string_to_sign.encode('utf-8')
         hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=hashlib.sha256).digest()
         sign = urllib.parse.quote_plus(base64.b64encode(hmac_code))
@@ -147,11 +155,16 @@ def post_to_dingtalk(data):
         errmsg = res_json.get("errmsg", "")
 
         if res.status_code != 200 or errcode != 0:
-            log_error(f"钉钉发送失败: HTTP {res.status_code}, errcode: {errcode}, errmsg: {errmsg}, Response Body: {res.text}")
+            err_msg = f"HTTP {res.status_code}, errcode: {errcode}, errmsg: {errmsg}, Response: {res.text}"
+            log_error(f"钉钉发送失败: {err_msg}")
+            return False, err_msg
         else:
             log_info(f"钉钉消息发送成功: {res.status_code}")
+            return True, "Success"
     except Exception as e:
-        log_error(f"钉钉发送请求发生异常: {e}")
+        err_msg = str(e)
+        log_error(f"钉钉发送请求发生异常: {err_msg}")
+        return False, err_msg
 
 def send_dingtalk_alert(alerts):
     if not config.DINGTALK_WEBHOOK: 
