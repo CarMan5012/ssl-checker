@@ -72,7 +72,7 @@ def send_email_alert(alerts):
       <body>
         <div class="container">
           <div class="header">
-            <h3>🚨 SSL 证书到期巡检报告 {"(测试模式)" if config.TEST_MODE else ""}</h3>
+            <h3>{"🚨 " if config.ALERT_USE_EMOJI else ""}SSL 证书到期巡检报告 {"(测试模式)" if config.TEST_MODE else ""}</h3>
             <p>阶梯提醒策略: {config.ALERT_INFO_DAYS}天(提醒) / {config.ALERT_WARNING_DAYS}天(警告) / {config.ALERT_CRITICAL_DAYS}天(严重)</p>
           </div>
           <table>
@@ -158,7 +158,13 @@ def send_dingtalk_alert(alerts):
         return
     
     title_prefix = "[TEST] " if config.TEST_MODE else ""
-    text = f"### {title_prefix}🛡️ SSL 证书到期监控告警\n\n"
+    
+    emoji_shield = "🛡️ " if config.ALERT_USE_EMOJI else ""
+    emoji_globe = "🌐 " if config.ALERT_USE_EMOJI else ""
+    emoji_chart = "📊 " if config.ALERT_USE_EMOJI else ""
+    emoji_hourglass = "⏳ " if config.ALERT_USE_EMOJI else ""
+    
+    text = f"### {title_prefix}{emoji_shield}SSL 证书到期监控告警\n\n"
     text += f"> 策略: {config.ALERT_INFO_DAYS}天提醒 / {config.ALERT_WARNING_DAYS}天警告 / {config.ALERT_CRITICAL_DAYS}天严重\n\n"
     text += f"---\n\n"
     
@@ -166,13 +172,13 @@ def send_dingtalk_alert(alerts):
         if i > 0:
             text += f"---\n\n"
         days_str = f"{a['days']} 天" if a['days'] is not None else "读取失败"
-        text += f"🌐 **域名:** {a['domain']}\n\n"
-        text += f"📊 **告警等级:** <font color='{a['color']}'>{a['level']}</font>\n\n"
-        text += f"⏳ **剩余天数:** <font color='{a['color']}'>**{days_str}**</font>\n\n"
-        if a['days'] is not None:
-            text += f"📅 **到期时间:** {a['detail']}\n\n"
-        else:
-            text += f"🔴 **错误详情:** {a['detail']}\n\n"
+        emoji_detail = ("📅 " if a['days'] is not None else "🔴 ") if config.ALERT_USE_EMOJI else ""
+        detail_label = "到期时间" if a['days'] is not None else "错误详情"
+        
+        text += f"{emoji_globe}**域名:** {a['domain']}\n\n"
+        text += f"{emoji_chart}**告警等级:** <font color='{a['color']}'>{a['level']}</font>\n\n"
+        text += f"{emoji_hourglass}**剩余天数:** <font color='{a['color']}'>**{days_str}**</font>\n\n"
+        text += f"{emoji_detail}**{detail_label}:** {a['detail']}\n\n"
 
     data = {"msgtype": "markdown", "markdown": {"title": "SSL证书巡检报告", "text": text}}
     post_to_dingtalk(data)
@@ -182,14 +188,21 @@ def send_system_error_alert(error_msg, file_path=None):
     if not config.DINGTALK_WEBHOOK: 
         return
     time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    text = f"### 🔴 SSL 监控系统运行错误\n\n"
+    
+    emoji_red = "🔴 " if config.ALERT_USE_EMOJI else ""
+    emoji_warn = "⚠️ " if config.ALERT_USE_EMOJI else ""
+    emoji_folder = "📂 " if config.ALERT_USE_EMOJI else ""
+    emoji_calendar = "📅 " if config.ALERT_USE_EMOJI else ""
+    emoji_bulb = "💡 " if config.ALERT_USE_EMOJI else ""
+    
+    text = f"### {emoji_red}SSL 监控系统运行错误\n\n"
     text += f"> 警告: 严重系统配置错误\n\n"
     text += f"---\n\n"
-    text += f"⚠️ **错误原因:** {error_msg}\n\n"
+    text += f"{emoji_warn}**错误原因:** {error_msg}\n\n"
     if file_path:
-        text += f"📂 **容器路径:** {file_path}\n\n"
-    text += f"📅 **当前时间:** {time_str}\n\n"
-    text += f"💡 **排查建议:** 请检查容器挂载路径或配置文件内容！"
+        text += f"{emoji_folder}**容器路径:** {file_path}\n\n"
+    text += f"{emoji_calendar}**当前时间:** {time_str}\n\n"
+    text += f"{emoji_bulb}**排查建议:** 请检查容器挂载路径或配置文件内容！"
     
     data = {"msgtype": "markdown", "markdown": {"title": "SSL监控系统错误", "text": text}}
     post_to_dingtalk(data)
@@ -300,19 +313,52 @@ def run_task():
             log_alert(f"{domain} 触发通知: {level} (今日工作日: {is_today_workday})")
             
             if not config.TEST_MODE:
+                existing_alert_time = ""
+                existing_is_holiday = False
+                if isinstance(last_state, dict):
+                    existing_alert_time = last_state.get("alert_time", "")
+                    existing_is_holiday = last_state.get("is_holiday", False)
+                    
+                if level != last_level:
+                    current_alert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    current_alert_time = existing_alert_time or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    
                 state[domain] = {
                     "level": level,
-                    "is_holiday": not is_today_workday,
-                    "alert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    "is_holiday": not is_today_workday if level != "正常" else False,
+                    "alert_time": current_alert_time,
+                    "success": ssl_info.get("success", False),
+                    "days": days,
+                    "expire": expire_time,
+                    "color": color,
+                    "ip": ssl_info.get("ip"),
+                    "error": ssl_info.get("error") if not ssl_info.get("success") else None
                 }
                 state_changed = True
         else:
-            # 如果证书恢复正常，重置状态
-            if level == "正常" and last_level != "正常":
+            if not config.TEST_MODE:
+                existing_alert_time = ""
+                existing_is_holiday = False
+                if isinstance(last_state, dict):
+                    existing_alert_time = last_state.get("alert_time", "")
+                    existing_is_holiday = last_state.get("is_holiday", False)
+                    
+                if level != last_level:
+                    current_alert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    current_alert_time = existing_alert_time or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    
                 state[domain] = {
-                    "level": "正常",
-                    "is_holiday": False,
-                    "alert_time": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    "level": level,
+                    "is_holiday": not is_today_workday if level != "正常" else False,
+                    "alert_time": current_alert_time,
+                    "success": ssl_info.get("success", False),
+                    "days": days,
+                    "expire": expire_time,
+                    "color": color,
+                    "ip": ssl_info.get("ip"),
+                    "error": ssl_info.get("error") if not ssl_info.get("success") else None
                 }
                 state_changed = True
             log_ok(f"{domain} 状态良好 (剩余 {days} 天)")

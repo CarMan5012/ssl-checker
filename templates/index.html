@@ -1615,6 +1615,18 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- 通用配置 -->
+                    <div class="setting-section">
+                        <div class="setting-section-title">
+                            <i data-lucide="cog" style="width: 14px; height: 14px;"></i>
+                            <span>通用选项</span>
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                            <label class="form-label" style="margin-bottom: 0; cursor: pointer;" for="cfg_alert_use_emoji">内置模板启用表情图标</label>
+                            <input type="checkbox" id="cfg_alert_use_emoji" style="width: 18px; height: 18px; cursor: pointer;">
+                        </div>
+                    </div>
                 </form>
             </div>
             <div class="drawer-footer">
@@ -2096,7 +2108,8 @@
             if (refreshIcon) refreshIcon.classList.add('spin');
             
             try {
-                const res = await apiFetch("/api/domains");
+                const url = isManual ? "/api/domains?refresh=true" : "/api/domains";
+                const res = await apiFetch(url);
                 if (!res) return; // 401 拦截
                 
                 if (!res.ok) throw new Error("API 请求失败");
@@ -2652,6 +2665,7 @@
                 document.getElementById('cfg_alert_info_days').value = data.alert_info_days;
                 document.getElementById('cfg_alert_warning_days').value = data.alert_warning_days;
                 document.getElementById('cfg_alert_critical_days').value = data.alert_critical_days;
+                document.getElementById('cfg_alert_use_emoji').checked = data.alert_use_emoji || false;
             } catch (e) {
                 if (e.message !== "Unauthorized") {
                     showToast("加载系统设置失败", "error");
@@ -2828,7 +2842,8 @@
 
                 alert_info_days: parseInt(document.getElementById('cfg_alert_info_days').value) || 14,
                 alert_warning_days: parseInt(document.getElementById('cfg_alert_warning_days').value) || 7,
-                alert_critical_days: parseInt(document.getElementById('cfg_alert_critical_days').value) || 3
+                alert_critical_days: parseInt(document.getElementById('cfg_alert_critical_days').value) || 3,
+                alert_use_emoji: document.getElementById('cfg_alert_use_emoji').checked
             };
 
             // 进行智能参数变更模块对比
@@ -2852,6 +2867,10 @@
                     payload.alert_warning_days !== originalSettings.alert_warning_days ||
                     payload.alert_critical_days !== originalSettings.alert_critical_days) {
                     changedModules.push("告警天数");
+                }
+                
+                if (payload.alert_use_emoji !== originalSettings.alert_use_emoji) {
+                    changedModules.push("表情配置");
                 }
             }
 

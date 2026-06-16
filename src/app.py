@@ -6,6 +6,8 @@ import datetime
 from datetime import timedelta
 from flask import Flask, request, jsonify, session, redirect
 from flask.sessions import SecureCookieSessionInterface
+from concurrent.futures import ThreadPoolExecutor
+
 
 import src.utils.config as config
 from src.utils.logger import log_info, log_ok, log_warn, log_alert, log_error
@@ -280,12 +282,86 @@ def auth_logout():
 @app.route('/api/domains', methods=['GET'])
 def list_domains():
     domains = get_domains()
-    result = []
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    
     # 动态热加载当前的检测阈值
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
-    for d in domains:
-        ssl_info = check_ssl(d, info, warn, crit)
-        result.append({"domain": d, "ssl": ssl_info})
+    
+    from src.monitor import load_state, save_state
+    state = load_state()
+    state_changed = False
+    
+    result = []
+    to_check = []
+    
+    if refresh:
+        to_check = domains
+    else:
+        for d in domains:
+            if d in state and isinstance(state[d], dict) and "success" in state[d]:
+                # 从状态缓存读取
+                cached = state[d]
+                ssl_info = {
+                    "success": cached.get("success", False),
+                    "days": cached.get("days"),
+                    "level": cached.get("level", "正常"),
+                    "color": cached.get("color", "#32CD32"),
+                    "ip": cached.get("ip")
+                }
+                if ssl_info["success"]:
+                    ssl_info["expire"] = cached.get("expire")
+                else:
+                    ssl_info["error"] = cached.get("error")
+                result.append({"domain": d, "ssl": ssl_info})
+            else:
+                to_check.append(d)
+                
+    if to_check:
+        # 并发线程池检测
+        def check_single(d):
+            return d, check_ssl(d, info, warn, crit)
+            
+        max_workers = min(len(to_check), 20)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            checked_results = executor.map(check_single, to_check)
+            
+        for d, ssl_info in checked_results:
+            result.append({"domain": d, "ssl": ssl_info})
+            if not config.TEST_MODE:
+                existing_alert_time = ""
+                existing_is_holiday = False
+                last_level = "正常"
+                if d in state and isinstance(state[d], dict):
+                    existing_alert_time = state[d].get("alert_time", "")
+                    existing_is_holiday = state[d].get("is_holiday", False)
+                    last_level = state[d].get("level", "正常")
+                
+                level = ssl_info.get("level", "正常")
+                if level != last_level:
+                    current_alert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    current_alert_time = existing_alert_time or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                state[d] = {
+                    "level": level,
+                    "is_holiday": existing_is_holiday if level != "正常" else False,
+                    "alert_time": current_alert_time,
+                    "success": ssl_info.get("success", False),
+                    "days": ssl_info.get("days"),
+                    "expire": ssl_info.get("expire") if ssl_info.get("success") else ssl_info.get("error"),
+                    "color": ssl_info.get("color"),
+                    "ip": ssl_info.get("ip"),
+                    "error": ssl_info.get("error") if not ssl_info.get("success") else None
+                }
+                state_changed = True
+                
+        if state_changed:
+            save_state(state)
+            
+    # 按 websites_list.txt 中的物理顺序排序返回给前端
+    domain_order = {d: i for i, d in enumerate(domains)}
+    result.sort(key=lambda x: domain_order.get(x["domain"], 999))
+    
     return jsonify(result)
 
 # 6. 单个域名清洗与添加
@@ -417,7 +493,8 @@ def get_settings():
         "dingtalk_keyword": config.DINGTALK_KEYWORD,
         "alert_info_days": config.ALERT_INFO_DAYS,
         "alert_warning_days": config.ALERT_WARNING_DAYS,
-        "alert_critical_days": config.ALERT_CRITICAL_DAYS
+        "alert_critical_days": config.ALERT_CRITICAL_DAYS,
+        "alert_use_emoji": config.ALERT_USE_EMOJI
     })
 
 # 11. 系统参数配置更改
@@ -438,7 +515,8 @@ def save_settings():
     fields = [
         'smtp_host', 'smtp_port', 'smtp_user', 'email_to',
         'dingtalk_webhook', 'dingtalk_secret', 'dingtalk_keyword',
-        'alert_info_days', 'alert_warning_days', 'alert_critical_days'
+        'alert_info_days', 'alert_warning_days', 'alert_critical_days',
+        'alert_use_emoji'
     ]
     for field in fields:
         if field in new_cfg:

@@ -34,6 +34,7 @@ DINGTALK_KEYWORD = ''
 ALERT_INFO_DAYS = 14
 ALERT_WARNING_DAYS = 7
 ALERT_CRITICAL_DAYS = 3
+ALERT_USE_EMOJI = False
 
 # 测试模式判断
 TEST_MODE = os.getenv('TEST_MODE', 'false').lower() == 'true' or '--test' in sys.argv
@@ -41,7 +42,7 @@ TEST_MODE = os.getenv('TEST_MODE', 'false').lower() == 'true' or '--test' in sys
 def load_all_configs():
     global SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, EMAIL_TO
     global DINGTALK_WEBHOOK, DINGTALK_TOKEN, DINGTALK_SECRET, DINGTALK_KEYWORD
-    global ALERT_INFO_DAYS, ALERT_WARNING_DAYS, ALERT_CRITICAL_DAYS
+    global ALERT_INFO_DAYS, ALERT_WARNING_DAYS, ALERT_CRITICAL_DAYS, ALERT_USE_EMOJI
 
     # 1. 尝试从 config.json 读取配置
     json_config = {}
@@ -73,6 +74,9 @@ def load_all_configs():
     ALERT_INFO_DAYS = int(get_cfg('alert_info_days', 'ALERT_INFO_DAYS', '14'))
     ALERT_WARNING_DAYS = int(get_cfg('alert_warning_days', 'ALERT_WARNING_DAYS', '7'))
     ALERT_CRITICAL_DAYS = int(get_cfg('alert_critical_days', 'ALERT_CRITICAL_DAYS', '3'))
+    
+    alert_use_emoji_val = str(get_cfg('alert_use_emoji', 'ALERT_USE_EMOJI', 'false')).lower()
+    ALERT_USE_EMOJI = alert_use_emoji_val in ['true', '1', 'yes']
 
     # 钉钉 Token / Webhook 自动拼接规整
     if DINGTALK_TOKEN:
