@@ -25,7 +25,11 @@ class DynamicSecureSessionInterface(SecureCookieSessionInterface):
         except Exception:
             return False
 
-app = Flask(__name__)
+import os
+
+cur_dir = os.path.dirname(os.path.abspath(__file__))
+dist_path = os.path.abspath(os.path.join(cur_dir, "..", "dist"))
+app = Flask(__name__, static_folder=dist_path, static_url_path='')
 app.session_interface = DynamicSecureSessionInterface()
 
 # 配置 Session cookie 安全属性
@@ -159,25 +163,20 @@ def check_authentication():
 @app.route('/dashboard/domains')
 @app.route('/dashboard/settings')
 def index_page():
-    cur_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(cur_dir, "..", "templates", "index.html"),
-        os.path.join(cur_dir, "templates", "index.html"),
-        os.path.join("templates", "index.html")
-    ]
-    
-    template_path = None
-    for p in candidates:
-        if os.path.exists(p):
-            template_path = p
-            break
-            
-    if template_path:
-        with open(template_path, "r", encoding="utf-8") as f:
-            return f.read()
-    else:
-        log_error("Frontend templates/index.html file is missing!")
-        return "<h3>SSL Monitor: 前端资源文件 templates/index.html 缺失，请检查配置。</h3>", 404
+    try:
+        return app.send_static_file('index.html')
+    except Exception:
+        cur_dir = os.path.dirname(os.path.abspath(__file__))
+        fallback_paths = [
+            os.path.join(cur_dir, "..", "dist", "index.html"),
+            os.path.join(cur_dir, "..", "templates", "index.html")
+        ]
+        for p in fallback_paths:
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read()
+        log_error("Frontend build file index.html or templates/index.html is missing!")
+        return "<h3>SSL Monitor: 前端资源文件缺失，请先编译前端项目。</h3>", 404
 
 # ---------------------------------------------------------
 # API 控制端点
