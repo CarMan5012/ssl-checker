@@ -549,11 +549,11 @@ def test_settings_dingtalk():
         
     # 简短 markdown 测试消息（不含 Emoji）
     time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    text_content = f"如果您能收到本条消息，说明您的钉钉机器人参数已成功连通！\n发送时间: {time_str}"
+    text_content = f"测试消息：您的钉钉机器人已成功连通。\n时间: {time_str}"
     payload = {
         "msgtype": "markdown",
         "markdown": {
-            "title": "测试",
+            "title": "系统测试消息",
             "text": text_content
         }
     }
@@ -597,8 +597,8 @@ def test_settings_email():
         
     # 纯文本测试邮件（不含 Emoji）
     time_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    subject = "【测试】邮件连通性"
-    text_body = f"如果您收到这封邮件，说明您的 SMTP 服务器发信配置正确且已成功连通！\n发送时间: {time_str}"
+    subject = "【测试】通道连通性验证"
+    text_body = f"测试消息：您的邮件发信配置已成功连通。\n时间: {time_str}"
     
     msg = MIMEMultipart()
     msg['From'], msg['To'] = user, email_to
