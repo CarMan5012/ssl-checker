@@ -298,15 +298,20 @@ def list_domains():
     else:
         for d in domains:
             if d in state and isinstance(state[d], dict) and "success" in state[d]:
-                # 从状态缓存读取
                 cached = state[d]
+                from src.utils.cert import parse_domain_and_port, get_domain_variants
+                hostname, _ = parse_domain_and_port(d)
+                display_h, punycode_h = get_domain_variants(hostname)
+                
                 ssl_info = {
                     "success": cached.get("success", False),
                     "days": cached.get("days"),
                     "level": cached.get("level", "正常"),
                     "color": cached.get("color", "#32CD32"),
                     "ip": cached.get("ip"),
-                    "issuer": cached.get("issuer")
+                    "issuer": cached.get("issuer"),
+                    "display_host": cached.get("display_host") or display_h,
+                    "punycode_host": cached.get("punycode_host") or punycode_h
                 }
                 if ssl_info["success"]:
                     ssl_info["expire"] = cached.get("expire")
@@ -352,6 +357,8 @@ def list_domains():
                     "color": ssl_info.get("color"),
                     "ip": ssl_info.get("ip"),
                     "issuer": ssl_info.get("issuer"),
+                    "display_host": ssl_info.get("display_host"),
+                    "punycode_host": ssl_info.get("punycode_host"),
                     "error": ssl_info.get("error") if not ssl_info.get("success") else None
                 }
                 state_changed = True

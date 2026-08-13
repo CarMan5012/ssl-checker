@@ -1,4 +1,4 @@
-export const domainRegex = /^([a-zA-Z0-9]|[a-zA-Z0-9][-a-zA-Z0-9]*[a-zA-Z0-9])(\.([a-zA-Z0-9]|[a-zA-Z0-9][-a-zA-Z0-9]*[a-zA-Z0-9]))*(:\d+)?$/;
+export const domainRegex = /^([a-zA-Z0-9\u4e00-\u9fa5]|[a-zA-Z0-9\u4e00-\u9fa5][-a-zA-Z0-9\u4e00-\u9fa5]*[a-zA-Z0-9\u4e00-\u9fa5])(\.([a-zA-Z0-9\u4e00-\u9fa5]|[a-zA-Z0-9\u4e00-\u9fa5][-a-zA-Z0-9\u4e00-\u9fa5]*[a-zA-Z0-9\u4e00-\u9fa5]))*(:\d+)?$/;
 
 export function parseDomain(d) {
     let clean = d.trim();

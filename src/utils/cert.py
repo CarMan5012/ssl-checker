@@ -88,19 +88,40 @@ def resolve_ip(hostname):
         pass
     return None
 
+def get_domain_variants(hostname):
+    """
+    智能识别并转换域名：
+    返回 (display_host, punycode_host)
+    如: "腾讯.cn" -> ("腾讯.cn", "xn--fiqs8s.cn")
+        "xn--fiqs8s.cn" -> ("腾讯.cn", "xn--fiqs8s.cn")
+    """
+    if not hostname:
+        return "", ""
+    try:
+        unicode_host = hostname.encode('ascii').decode('idna')
+    except Exception:
+        unicode_host = hostname
+
+    try:
+        punycode_host = unicode_host.encode('idna').decode('ascii')
+    except Exception:
+        punycode_host = hostname
+
+    return unicode_host, punycode_host
+
 def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
     """
     统一检测 SSL 证书有效期状态。
     返回结构:
-    - 成功: {"success": True, "days": int, "expire": str, "level": str, "color": str, "ip": str}
-    - 失败: {"success": False, "error": str, "level": "失败", "color": "#999999", "days": None, "ip": str}
+    - 成功: {"success": True, "days": int, "expire": str, "level": str, "color": str, "ip": str, "issuer": str, "display_host": str, "punycode_host": str}
+    - 失败: {"success": False, "error": str, "level": "失败", "color": "#999999", "days": None, "ip": str, "issuer": str, "display_host": str, "punycode_host": str}
     """
     hostname, port = parse_domain_and_port(domain_with_port)
+    display_host, punycode_host = get_domain_variants(hostname)
     ip_address = None
-    encoded_hostname = hostname
+    encoded_hostname = punycode_host or hostname
 
     try:
-        encoded_hostname = hostname.encode('idna').decode('ascii')
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
@@ -115,7 +136,8 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
                 if not cert_bin:
                     return {
                         "success": False, "error": "无法获取证书二进制数据",
-                        "level": "失败", "color": "#999999", "days": None, "ip": ip_address
+                        "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None,
+                        "display_host": display_host, "punycode_host": punycode_host
                     }
 
         # 优先使用 cryptography 解析二进制证书，未安装则进行 CERT_REQUIRED 握手降级
@@ -159,13 +181,15 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
                     if not cert_dict:
                         return {
                             "success": False, "error": "无法解析对端证书字典",
-                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None
+                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None,
+                            "display_host": display_host, "punycode_host": punycode_host
                         }
                     not_after = cert_dict.get("notAfter")
                     if not not_after:
                         return {
                             "success": False, "error": "证书缺少到期时间",
-                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None
+                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None,
+                            "display_host": display_host, "punycode_host": punycode_host
                         }
                     expire_ts = ssl.cert_time_to_seconds(not_after)
 
@@ -204,7 +228,9 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
             "level": level,
             "color": color,
             "ip": ip_address,
-            "issuer": issuer_org
+            "issuer": issuer_org,
+            "display_host": display_host,
+            "punycode_host": punycode_host
         }
 
     except Exception as e:
@@ -219,5 +245,7 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
             "color": "#999999",
             "days": None,
             "ip": ip_address,
-            "issuer": None
+            "issuer": None,
+            "display_host": display_host,
+            "punycode_host": punycode_host
         }

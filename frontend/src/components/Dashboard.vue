@@ -93,6 +93,12 @@
                   <component :is="getSortIcon('port')" class="sort-icon" />
                 </div>
               </th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'ip' }" @click="handleSort('ip')">
+                <div class="sort-header-container">
+                  <span>解析 IP</span>
+                  <component :is="getSortIcon('ip')" class="sort-icon" />
+                </div>
+              </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'issuer' }" @click="handleSort('issuer')">
                 <div class="sort-header-container">
                   <span>颁发者 (组织O)</span>
@@ -125,6 +131,7 @@
               <tr class="skeleton-row" v-for="i in 3" :key="i">
                 <td><div class="skeleton-bar skeleton-domain"></div></td>
                 <td><div class="skeleton-bar skeleton-port"></div></td>
+                <td><div class="skeleton-bar skeleton-port"></div></td>
                 <td><div class="skeleton-bar skeleton-domain"></div></td>
                 <td><div class="skeleton-bar skeleton-badge"></div></td>
                 <td><div class="skeleton-bar skeleton-days"></div></td>
@@ -133,7 +140,7 @@
             </template>
             <!-- 暂无数据提示 -->
             <tr v-else-if="filteredDomains.length === 0">
-              <td colspan="6" class="empty-state">
+              <td colspan="7" class="empty-state">
                 <div class="empty-icon"><ShieldAlert style="width: 44px; height: 44px;" /></div>
                 <div class="empty-title">暂无数据</div>
                 <div class="empty-desc">没有找到符合当前过滤条件的监控条目。</div>
@@ -142,12 +149,15 @@
             <!-- 真实数据渲染 -->
             <tr v-else v-for="item in filteredDomains" :key="item.domain">
               <td class="domain-cell">
-                <div>{{ getParsedDomain(item.domain).host }}</div>
-                <div v-if="item.ssl.ip" style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
-                  {{ item.ssl.ip }}
+                <div style="font-weight: 500;">{{ item.ssl.display_host || getParsedDomain(item.domain).host }}</div>
+                <div v-if="item.ssl.punycode_host && item.ssl.punycode_host !== (item.ssl.display_host || getParsedDomain(item.domain).host)" style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
+                  {{ item.ssl.punycode_host }}
                 </div>
               </td>
               <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
+              <td class="ip-cell" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
+                {{ item.ssl.ip || '-' }}
+              </td>
               <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
                 {{ item.ssl.issuer || '-' }}
               </td>
@@ -308,8 +318,13 @@ const filteredDomains = computed(() => {
     // 搜索过滤
     const parsed = parseDomain(item.domain)
     const query = searchQuery.value.trim().toLowerCase()
+    const displayHost = (item.ssl.display_host || parsed.host).toLowerCase()
+    const punyHost = (item.ssl.punycode_host || parsed.host).toLowerCase()
     const issuerStr = (item.ssl.issuer || '').toLowerCase()
-    const matchesSearch = parsed.host.toLowerCase().includes(query) || parsed.port.includes(query) || issuerStr.includes(query)
+    const ipStr = (item.ssl.ip || '').toLowerCase()
+
+    const matchesSearch = displayHost.includes(query) || punyHost.includes(query) || 
+                          parsed.port.includes(query) || issuerStr.includes(query) || ipStr.includes(query)
     if (!matchesSearch) return false
 
     // 指标卡片过滤
@@ -339,6 +354,9 @@ const filteredDomains = computed(() => {
       } else if (sortKey.value === 'port') {
         valA = parseInt(parseDomain(a.domain).port) || 443
         valB = parseInt(parseDomain(b.domain).port) || 443
+      } else if (sortKey.value === 'ip') {
+        valA = a.ssl.ip || ''
+        valB = b.ssl.ip || ''
       } else if (sortKey.value === 'issuer') {
         valA = a.ssl.issuer || ''
         valB = b.ssl.issuer || ''
