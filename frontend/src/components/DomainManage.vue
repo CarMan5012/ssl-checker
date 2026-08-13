@@ -57,16 +57,16 @@
                   <component :is="getSortIcon('domain')" class="sort-icon" />
                 </div>
               </th>
-              <th class="sortable" :class="{ 'active-sort': sortKey === 'port' }" @click="handleSort('port')">
-                <div class="sort-header-container">
-                  <span>端口</span>
-                  <component :is="getSortIcon('port')" class="sort-icon" />
-                </div>
-              </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'ip' }" @click="handleSort('ip')">
                 <div class="sort-header-container">
                   <span>解析 IP</span>
                   <component :is="getSortIcon('ip')" class="sort-icon" />
+                </div>
+              </th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'port' }" @click="handleSort('port')">
+                <div class="sort-header-container">
+                  <span>端口</span>
+                  <component :is="getSortIcon('port')" class="sort-icon" />
                 </div>
               </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'issuer' }" @click="handleSort('issuer')">
@@ -131,10 +131,10 @@
                   {{ item.ssl.punycode_host }}
                 </div>
               </td>
-              <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
               <td class="ip-cell" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
                 {{ item.ssl.ip || '-' }}
               </td>
+              <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
               <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
                 {{ item.ssl.issuer || '-' }}
               </td>
@@ -150,6 +150,15 @@
               <td class="date-cell">{{ item.ssl.success ? item.ssl.expire : item.ssl.error }}</td>
               <td style="text-align: center;">
                 <div class="action-cell">
+                  <button 
+                    class="btn-secondary btn-icon-only" 
+                    style="width:28px; height:28px; border-radius:6px;" 
+                    :disabled="singleLoadingMap[item.domain]"
+                    @click="openEdit(item.domain)" 
+                    title="编辑域名"
+                  >
+                    <Edit2 style="width: 12px; height: 12px;" />
+                  </button>
                   <button 
                     class="btn-secondary btn-icon-only" 
                     style="width:28px; height:28px; border-radius:6px;" 
@@ -174,17 +183,38 @@
         </table>
       </div>
     </div>
+
+    <!-- 编辑域名弹窗 -->
+    <EditModal 
+      :show="showEditModal" 
+      :target-domain="editTargetDomain" 
+      @close="showEditModal = false" 
+      @updated="handleEditUpdated" 
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, inject } from 'vue'
 import { 
-  PlusCircle, Plus, ListPlus, Search, X, ShieldAlert, RefreshCw, Trash2, Loader,
+  PlusCircle, Plus, ListPlus, Search, X, ShieldAlert, RefreshCw, Trash2, Loader, Edit2,
   ChevronsUpDown, ChevronUp, ChevronDown 
 } from 'lucide-vue-next'
 import { parseDomain, domainRegex } from '../utils/domain'
 import { apiFetch } from '../utils/api'
+import EditModal from './EditModal.vue'
+
+const showEditModal = ref(false)
+const editTargetDomain = ref('')
+
+const openEdit = (domainStr) => {
+  editTargetDomain.value = domainStr
+  showEditModal.value = true
+}
+
+const handleEditUpdated = () => {
+  emit('refresh')
+}
 
 const props = defineProps({
   domains: {

@@ -417,6 +417,53 @@ def delete_domain():
     save_domains(domains)
     return jsonify({"success": True})
 
+# 7.1 单个域名修改更新
+@app.route('/api/domains', methods=['PUT'])
+def update_domain():
+    data = request.get_json() or {}
+    old_domain = data.get('old_domain', '').strip()
+    new_domain = data.get('new_domain', '').strip()
+
+    if not old_domain or not new_domain:
+        return jsonify({"error": "原域名和新域名不能为空"}), 400
+
+    # 清洗新域名
+    new_domain = new_domain.split("#")[0].strip()
+    if new_domain.startswith("http://"):
+        new_domain = new_domain[7:]
+    elif new_domain.startswith("https://"):
+        new_domain = new_domain[8:]
+    if "/" in new_domain:
+        new_domain = new_domain.split("/")[0]
+    new_domain = new_domain.strip()
+
+    if not new_domain:
+        return jsonify({"error": "无效的新域名格式"}), 400
+
+    domains = get_domains()
+    if old_domain not in domains:
+        return jsonify({"error": "原域名不存在"}), 404
+
+    if new_domain != old_domain and new_domain in domains:
+        return jsonify({"error": "新域名已存在于列表中"}), 400
+
+    idx = domains.index(old_domain)
+    domains[idx] = new_domain
+    save_domains(domains)
+
+    # 迁移状态记录
+    from src.monitor import load_state, save_state
+    state = load_state()
+    if old_domain in state:
+        state[new_domain] = state.pop(old_domain)
+        save_state(state)
+
+    info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
+    ssl_info = check_ssl(new_domain, info, warn, crit)
+
+    log_ok(f"Domain updated from '{old_domain}' to '{new_domain}' by user '{session.get('username')}'")
+    return jsonify({"success": True, "domain": new_domain, "ssl": ssl_info})
+
 # 8. 批量域名导入
 @app.route('/api/domains/import', methods=['POST'])
 def import_domains():

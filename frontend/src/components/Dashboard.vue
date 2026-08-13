@@ -87,16 +87,16 @@
                   <component :is="getSortIcon('domain')" class="sort-icon" />
                 </div>
               </th>
-              <th class="sortable" :class="{ 'active-sort': sortKey === 'port' }" @click="handleSort('port')">
-                <div class="sort-header-container">
-                  <span>端口</span>
-                  <component :is="getSortIcon('port')" class="sort-icon" />
-                </div>
-              </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'ip' }" @click="handleSort('ip')">
                 <div class="sort-header-container">
                   <span>解析 IP</span>
                   <component :is="getSortIcon('ip')" class="sort-icon" />
+                </div>
+              </th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'port' }" @click="handleSort('port')">
+                <div class="sort-header-container">
+                  <span>端口</span>
+                  <component :is="getSortIcon('port')" class="sort-icon" />
                 </div>
               </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'issuer' }" @click="handleSort('issuer')">
@@ -154,10 +154,10 @@
                   {{ item.ssl.punycode_host }}
                 </div>
               </td>
-              <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
               <td class="ip-cell" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
                 {{ item.ssl.ip || '-' }}
               </td>
+              <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
               <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
                 {{ item.ssl.issuer || '-' }}
               </td>
