@@ -63,6 +63,12 @@
                   <component :is="getSortIcon('port')" class="sort-icon" />
                 </div>
               </th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'issuer' }" @click="handleSort('issuer')">
+                <div class="sort-header-container">
+                  <span>颁发者 (组织O)</span>
+                  <component :is="getSortIcon('issuer')" class="sort-icon" />
+                </div>
+              </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'status' }" @click="handleSort('status')">
                 <div class="sort-header-container">
                   <span>状态</span>
@@ -90,6 +96,7 @@
               <tr class="skeleton-row" v-for="i in 3" :key="i">
                 <td><div class="skeleton-bar skeleton-domain"></div></td>
                 <td><div class="skeleton-bar skeleton-port"></div></td>
+                <td><div class="skeleton-bar skeleton-domain"></div></td>
                 <td><div class="skeleton-bar skeleton-badge"></div></td>
                 <td><div class="skeleton-bar skeleton-days"></div></td>
                 <td><div class="skeleton-bar skeleton-date"></div></td>
@@ -98,7 +105,7 @@
             </template>
             <!-- 无数据提示 -->
             <tr v-else-if="filteredManageDomains.length === 0">
-              <td colspan="6" class="empty-state">
+              <td colspan="7" class="empty-state">
                 <div class="empty-icon"><ShieldAlert style="width: 44px; height: 44px;" /></div>
                 <div class="empty-title">暂无数据</div>
                 <div class="empty-desc">管理列表中无监控条目。</div>
@@ -118,6 +125,9 @@
                 </div>
               </td>
               <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
+              <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
+                {{ item.ssl.issuer || '-' }}
+              </td>
               <td>
                 <span class="badge" :class="getBadgeClass(item.ssl)">
                   <span class="badge-dot"></span>
@@ -179,22 +189,13 @@ const props = defineProps({
 
 const emit = defineEmits(['open-import', 'confirm-delete', 'refresh', 'update-domain'])
 
-const showToast = inject('showToast')
-const triggerOnUnauthorized = inject('triggerOnUnauthorized')
-
+// 添加新域名逻辑
 const newDomain = ref('')
 const isInputValid = ref(true)
 const addLoading = ref(false)
-const searchManageQuery = ref('')
 
-const sortKey = ref('')
-const sortOrder = ref('asc')
-
-const singleLoadingMap = reactive({})
-
-const getParsedDomain = (d) => {
-  return parseDomain(d)
-}
+const showToast = inject('showToast', (msg) => alert(msg))
+const triggerOnUnauthorized = inject('triggerOnUnauthorized')
 
 const validateInput = () => {
   const val = newDomain.value.trim()
@@ -252,29 +253,41 @@ const handleAdd = async () => {
   }
 }
 
-const refreshSingle = async (domain) => {
-  singleLoadingMap[domain] = true
+// 域名管理列表内单个重新检测逻辑
+const singleLoadingMap = reactive({})
+
+const refreshSingle = async (domainStr) => {
+  singleLoadingMap[domainStr] = true
   try {
-    const res = await apiFetch(`/api/domains/check?domain=${encodeURIComponent(domain)}`, {}, triggerOnUnauthorized)
+    const res = await apiFetch(`/api/domains/check?domain=${encodeURIComponent(domainStr)}`, {}, triggerOnUnauthorized)
     if (!res) return
     
     if (!res.ok) throw new Error("检查失败")
     const freshItem = await res.json()
     
     // 更新本地列表对应域名状态
-    const index = props.domains.findIndex(item => item.domain === domain)
+    const index = props.domains.findIndex(item => item.domain === domainStr)
     if (index !== -1) {
       emit('update-domain', freshItem)
     }
     
-    showToast(`域名 ${parseDomain(domain).host} 已独立刷新完成`)
+    showToast(`域名 ${parseDomain(domainStr).host} 已独立刷新完成`)
   } catch (e) {
     if (e.message !== "Unauthorized") {
       showToast(`刷新域名失败`, "error")
     }
   } finally {
-    singleLoadingMap[domain] = false
+    singleLoadingMap[domainStr] = false
   }
+}
+
+// 搜索与排序
+const searchManageQuery = ref('')
+const sortKey = ref('')
+const sortOrder = ref('asc')
+
+const getParsedDomain = (domain) => {
+  return parseDomain(domain)
 }
 
 // 筛选排序
@@ -318,7 +331,8 @@ const filteredManageDomains = computed(() => {
   let list = props.domains.filter(item => {
     const parsed = parseDomain(item.domain)
     const query = searchManageQuery.value.trim().toLowerCase()
-    return parsed.host.toLowerCase().includes(query) || parsed.port.includes(query)
+    const issuerStr = (item.ssl.issuer || '').toLowerCase()
+    return parsed.host.toLowerCase().includes(query) || parsed.port.includes(query) || issuerStr.includes(query)
   })
 
   if (sortKey.value) {
@@ -331,6 +345,9 @@ const filteredManageDomains = computed(() => {
       } else if (sortKey.value === 'port') {
         valA = parseInt(parseDomain(a.domain).port) || 443
         valB = parseInt(parseDomain(b.domain).port) || 443
+      } else if (sortKey.value === 'issuer') {
+        valA = a.ssl.issuer || ''
+        valB = b.ssl.issuer || ''
       } else if (sortKey.value === 'status') {
         const priority = { '正常': 4, '提醒': 3, '警告': 2, '严重': 1, '失败': 0 }
         valA = a.ssl.success ? priority[a.ssl.level] : 0

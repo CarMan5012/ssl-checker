@@ -345,6 +345,7 @@ def run_task():
                     "expire": expire_time,
                     "color": color,
                     "ip": ssl_info.get("ip"),
+                    "issuer": ssl_info.get("issuer"),
                     "error": ssl_info.get("error") if not ssl_info.get("success") else None
                 }
                 state_changed = True
@@ -370,6 +371,7 @@ def run_task():
                     "expire": expire_time,
                     "color": color,
                     "ip": ssl_info.get("ip"),
+                    "issuer": ssl_info.get("issuer"),
                     "error": ssl_info.get("error") if not ssl_info.get("success") else None
                 }
                 state_changed = True

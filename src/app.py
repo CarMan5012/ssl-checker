@@ -305,7 +305,8 @@ def list_domains():
                     "days": cached.get("days"),
                     "level": cached.get("level", "正常"),
                     "color": cached.get("color", "#32CD32"),
-                    "ip": cached.get("ip")
+                    "ip": cached.get("ip"),
+                    "issuer": cached.get("issuer")
                 }
                 if ssl_info["success"]:
                     ssl_info["expire"] = cached.get("expire")
@@ -350,6 +351,7 @@ def list_domains():
                     "expire": ssl_info.get("expire") if ssl_info.get("success") else ssl_info.get("error"),
                     "color": ssl_info.get("color"),
                     "ip": ssl_info.get("ip"),
+                    "issuer": ssl_info.get("issuer"),
                     "error": ssl_info.get("error") if not ssl_info.get("success") else None
                 }
                 state_changed = True

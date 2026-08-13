@@ -93,6 +93,12 @@
                   <component :is="getSortIcon('port')" class="sort-icon" />
                 </div>
               </th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'issuer' }" @click="handleSort('issuer')">
+                <div class="sort-header-container">
+                  <span>颁发者 (组织O)</span>
+                  <component :is="getSortIcon('issuer')" class="sort-icon" />
+                </div>
+              </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'status' }" @click="handleSort('status')">
                 <div class="sort-header-container">
                   <span>状态</span>
@@ -119,6 +125,7 @@
               <tr class="skeleton-row" v-for="i in 3" :key="i">
                 <td><div class="skeleton-bar skeleton-domain"></div></td>
                 <td><div class="skeleton-bar skeleton-port"></div></td>
+                <td><div class="skeleton-bar skeleton-domain"></div></td>
                 <td><div class="skeleton-bar skeleton-badge"></div></td>
                 <td><div class="skeleton-bar skeleton-days"></div></td>
                 <td><div class="skeleton-bar skeleton-date"></div></td>
@@ -126,7 +133,7 @@
             </template>
             <!-- 暂无数据提示 -->
             <tr v-else-if="filteredDomains.length === 0">
-              <td colspan="5" class="empty-state">
+              <td colspan="6" class="empty-state">
                 <div class="empty-icon"><ShieldAlert style="width: 44px; height: 44px;" /></div>
                 <div class="empty-title">暂无数据</div>
                 <div class="empty-desc">没有找到符合当前过滤条件的监控条目。</div>
@@ -141,6 +148,9 @@
                 </div>
               </td>
               <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
+              <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
+                {{ item.ssl.issuer || '-' }}
+              </td>
               <td>
                 <span class="badge" :class="getBadgeClass(item.ssl)">
                   <span class="badge-dot"></span>
@@ -298,7 +308,8 @@ const filteredDomains = computed(() => {
     // 搜索过滤
     const parsed = parseDomain(item.domain)
     const query = searchQuery.value.trim().toLowerCase()
-    const matchesSearch = parsed.host.toLowerCase().includes(query) || parsed.port.includes(query)
+    const issuerStr = (item.ssl.issuer || '').toLowerCase()
+    const matchesSearch = parsed.host.toLowerCase().includes(query) || parsed.port.includes(query) || issuerStr.includes(query)
     if (!matchesSearch) return false
 
     // 指标卡片过滤
@@ -328,6 +339,9 @@ const filteredDomains = computed(() => {
       } else if (sortKey.value === 'port') {
         valA = parseInt(parseDomain(a.domain).port) || 443
         valB = parseInt(parseDomain(b.domain).port) || 443
+      } else if (sortKey.value === 'issuer') {
+        valA = a.ssl.issuer || ''
+        valB = b.ssl.issuer || ''
       } else if (sortKey.value === 'status') {
         const priority = { '正常': 4, '提醒': 3, '警告': 2, '严重': 1, '失败': 0 }
         valA = a.ssl.success ? priority[a.ssl.level] : 0

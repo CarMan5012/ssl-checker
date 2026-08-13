@@ -126,6 +126,8 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
         except ImportError:
             has_crypto = False
 
+        issuer_org = None
+
         if has_crypto:
             cert = x509.load_der_x509_certificate(cert_bin, default_backend())
             try:
@@ -136,6 +138,18 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
                 # 向后兼容旧版本 cryptography
                 expire_date = cert.not_valid_after
                 expire_ts = expire_date.replace(tzinfo=datetime.timezone.utc).timestamp()
+
+            # 解析颁发者组织 (O)
+            try:
+                org_attrs = cert.issuer.get_attributes_for_oid(x509.NameOID.ORGANIZATION_NAME)
+                if org_attrs:
+                    issuer_org = org_attrs[0].value
+                else:
+                    cn_attrs = cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+                    if cn_attrs:
+                        issuer_org = cn_attrs[0].value
+            except Exception:
+                pass
         else:
             # 降级方案：使用内置 ssl 重新建立验证连接
             context_req = ssl.create_default_context()
@@ -145,15 +159,36 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
                     if not cert_dict:
                         return {
                             "success": False, "error": "无法解析对端证书字典",
-                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address
+                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None
                         }
                     not_after = cert_dict.get("notAfter")
                     if not not_after:
                         return {
                             "success": False, "error": "证书缺少到期时间",
-                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address
+                            "level": "失败", "color": "#999999", "days": None, "ip": ip_address, "issuer": None
                         }
                     expire_ts = ssl.cert_time_to_seconds(not_after)
+
+                    # 提取降级方案中的 issuer 组织
+                    issuer_tuples = cert_dict.get("issuer", ())
+                    for rdn in issuer_tuples:
+                        for k, v in rdn:
+                            if k == 'organizationName':
+                                issuer_org = v
+                                break
+                        if issuer_org:
+                            break
+                    if not issuer_org:
+                        for rdn in issuer_tuples:
+                            for k, v in rdn:
+                                if k == 'commonName':
+                                    issuer_org = v
+                                    break
+                            if issuer_org:
+                                break
+
+        if not issuer_org:
+            issuer_org = "未知"
 
         # 转换为本地时区时间
         expire_local = datetime.datetime.fromtimestamp(expire_ts)
@@ -168,7 +203,8 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
             "expire": expire_local.strftime("%Y-%m-%d %H:%M:%S"),
             "level": level,
             "color": color,
-            "ip": ip_address
+            "ip": ip_address,
+            "issuer": issuer_org
         }
 
     except Exception as e:
@@ -182,5 +218,6 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
             "level": "失败",
             "color": "#999999",
             "days": None,
-            "ip": ip_address
+            "ip": ip_address,
+            "issuer": None
         }
