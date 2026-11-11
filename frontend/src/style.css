@@ -1228,3 +1228,17 @@
             box-shadow: var(--shadow-sm);
             border: 1px solid var(--card-border);
         }
+/* 持续显示后台巡检异常，避免四秒提示消失后无人发现。 */
+.monitor-status-alert {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+    padding: 11px 14px;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 10px;
+    background: rgba(239, 68, 68, 0.09);
+    color: var(--danger-color);
+    font-size: 13px;
+    line-height: 1.5;
+}

@@ -6,6 +6,7 @@ import datetime
 from datetime import timedelta
 from flask import Flask, request, jsonify, session, redirect
 from flask.sessions import SecureCookieSessionInterface
+from werkzeug.exceptions import HTTPException
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -13,6 +14,7 @@ import src.utils.config as config
 from src.utils.logger import log_info, log_ok, log_warn, log_alert, log_error
 from src.utils.file_io import atomic_write_file
 from src.utils.cert import check_ssl
+from src.utils.domain import normalize_domain
 
 class DynamicSecureSessionInterface(SecureCookieSessionInterface):
     def get_cookie_secure(self, app):
@@ -37,8 +39,21 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=None,  # 设为 None，由 DynamicSecureSessionInterface 动态决定
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=2)
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=2),
+    MAX_CONTENT_LENGTH=1024 * 1024
 )
+
+@app.errorhandler(Exception)
+def handle_api_error(error):
+    if not request.path.startswith('/api/'):
+        if isinstance(error, HTTPException):
+            return error
+        log_error(f"页面请求处理失败: {request.path}: {error}")
+        return "Internal Server Error", 500
+    if isinstance(error, HTTPException):
+        return jsonify({"error": error.description}), error.code
+    log_error(f"API 请求处理失败: {request.method} {request.path}: {error}")
+    return jsonify({"error": "服务器处理请求失败，请查看服务日志"}), 500
 
 def init_flask_secret():
     secret = None
@@ -94,12 +109,14 @@ def load_users():
                 return json.load(f)
         except Exception as e:
             log_error(f"读取用户文件失败: {e}")
-            return {}
+            raise RuntimeError("用户数据文件不可读，请修复后重试") from e
     return {}
 
 def save_users(users):
     if atomic_write_file(config.USERS_FILE, users, is_json=True):
         log_info(f"用户信息已更新保存至 {config.USERS_FILE}")
+        return True
+    return False
 
 def get_domains():
     if not os.path.exists(config.LIST_FILE):
@@ -116,6 +133,37 @@ def save_domains(domains):
     content = "\n".join(domains) + "\n"
     if atomic_write_file(config.LIST_FILE, content, is_json=False):
         log_info(f"域名列表已同步写入 {config.LIST_FILE}，总域名数: {len(domains)}")
+        return True
+    return False
+
+def cache_ssl_result(state, domain, ssl_info):
+    """更新页面检测缓存，同时保留巡检的已通知等级。"""
+    previous = state.get(domain)
+    previous = previous if isinstance(previous, dict) else {}
+    level = ssl_info.get("level", "正常")
+    previous_level = previous.get("level", "正常")
+    now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    retry_at = previous.get("retry_at") if ssl_info.get('success') else (
+        datetime.datetime.now() + datetime.timedelta(minutes=30)
+    ).isoformat()
+    state[domain] = {
+        **previous,
+        "level": level,
+        "alert_level": previous.get("alert_level", previous_level),
+        "is_holiday": previous.get("is_holiday", False) if level != "正常" else False,
+        "alert_time": now if level != previous_level else previous.get("alert_time") or now,
+        "success": ssl_info.get("success", False),
+        "days": ssl_info.get("days"),
+        "expire": ssl_info.get("expire") if ssl_info.get("success") else ssl_info.get("error"),
+        "color": ssl_info.get("color"),
+        "ip": ssl_info.get("ip"),
+        "issuer": ssl_info.get("issuer"),
+        "display_host": ssl_info.get("display_host"),
+        "punycode_host": ssl_info.get("punycode_host"),
+        "error": ssl_info.get("error") if not ssl_info.get("success") else None
+    }
+    state[domain]["retry_count"] = previous.get("retry_count", 0) if ssl_info.get('success') else 0
+    state[domain]["retry_at"] = retry_at
 
 # ---------------------------------------------------------
 # 会话拦截器（越权安全加固修复）
@@ -128,19 +176,31 @@ def check_authentication():
         public_apis = [
             '/api/auth/status',
             '/api/auth/login',
-            '/api/auth/register'
+            '/api/auth/register',
+            '/api/monitor/status'
         ]
         
         is_public = False
         if request.path in public_apis:
             is_public = True
-        elif request.path == '/api/domains' and request.method == 'GET':
+        elif request.path == '/api/domains' and request.method == 'GET' and request.args.get('refresh', 'false').lower() != 'true':
             # 只放行获取域名列表的 GET 方法，保护 POST/DELETE 免遭越权
             is_public = True
             
         if not is_public and 'username' not in session:
             log_warn(f"Unauthorized API request: {request.method} {request.path} from IP {request.remote_addr}")
             return jsonify({"error": "Unauthorized"}), 401
+        if request.method in ('POST', 'PUT', 'DELETE') and request.is_json:
+            payload = request.get_json(silent=True)
+            if not isinstance(payload, dict):
+                return jsonify({"error": "请求体必须是 JSON 对象"}), 400
+            string_fields = {
+                'username', 'password', 'domain', 'old_domain', 'new_domain',
+                'domains', 'smtp_host', 'smtp_user', 'smtp_pass', 'email_to',
+                'dingtalk_webhook', 'dingtalk_secret', 'dingtalk_keyword'
+            }
+            if any(key in payload and not isinstance(payload[key], str) for key in string_fields):
+                return jsonify({"error": "文本字段格式无效"}), 400
     
     # 2. 已登录用户访问 /login 自动重定向到 /dashboard
     if request.path == '/login' and 'username' in session:
@@ -213,7 +273,8 @@ def auth_register():
 
     pwd_hash, salt = hash_password(password)
     users[username] = {"pwd_hash": pwd_hash, "salt": salt}
-    save_users(users)
+    if not save_users(users):
+        return jsonify({"error": "保存用户失败"}), 500
     
     log_ok(f"Registered new user '{username}' from IP {request.remote_addr}")
     return jsonify({"success": True})
@@ -278,6 +339,26 @@ def auth_logout():
     return jsonify({"success": True})
 
 # 5. 获取域名状态列表
+@app.route('/api/monitor/status', methods=['GET'])
+def monitor_status():
+    from src.monitor import load_state, RUNTIME_ERROR
+    state = load_state()
+    meta = state.get('__meta__', {})
+    if not isinstance(meta, dict):
+        meta = {}
+    domains = set(get_domains())
+    failed_count = sum(
+        1 for domain in domains if isinstance(state.get(domain), dict)
+        and state[domain].get('success') is False
+    )
+    return jsonify({
+        "last_run_at": meta.get('last_run_at'),
+        "last_daily_run": meta.get('last_daily_run'),
+        "last_error": RUNTIME_ERROR or meta.get('last_error'),
+        "failed_domains": failed_count
+    })
+
+# 5. 获取域名状态列表
 @app.route('/api/domains', methods=['GET'])
 def list_domains():
     domains = get_domains()
@@ -333,38 +414,12 @@ def list_domains():
         for d, ssl_info in checked_results:
             result.append({"domain": d, "ssl": ssl_info})
             if not config.TEST_MODE:
-                existing_alert_time = ""
-                existing_is_holiday = False
-                last_level = "正常"
-                if d in state and isinstance(state[d], dict):
-                    existing_alert_time = state[d].get("alert_time", "")
-                    existing_is_holiday = state[d].get("is_holiday", False)
-                    last_level = state[d].get("level", "正常")
-                
-                level = ssl_info.get("level", "正常")
-                if level != last_level:
-                    current_alert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    current_alert_time = existing_alert_time or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                state[d] = {
-                    "level": level,
-                    "is_holiday": existing_is_holiday if level != "正常" else False,
-                    "alert_time": current_alert_time,
-                    "success": ssl_info.get("success", False),
-                    "days": ssl_info.get("days"),
-                    "expire": ssl_info.get("expire") if ssl_info.get("success") else ssl_info.get("error"),
-                    "color": ssl_info.get("color"),
-                    "ip": ssl_info.get("ip"),
-                    "issuer": ssl_info.get("issuer"),
-                    "display_host": ssl_info.get("display_host"),
-                    "punycode_host": ssl_info.get("punycode_host"),
-                    "error": ssl_info.get("error") if not ssl_info.get("success") else None
-                }
+                cache_ssl_result(state, d, ssl_info)
                 state_changed = True
                 
         if state_changed:
-            save_state(state)
+            if not save_state(state):
+                return jsonify({"error": "保存检测状态失败"}), 500
             
     # 按 websites_list.txt 中的物理顺序排序返回给前端
     domain_order = {d: i for i, d in enumerate(domains)}
@@ -380,15 +435,7 @@ def add_domain():
     if not domain:
         return jsonify({"error": "域名不能为空"}), 400
 
-    # 清洗逻辑与之前完全对齐
-    domain = domain.split("#")[0].strip()
-    if domain.startswith("http://"):
-        domain = domain[7:]
-    elif domain.startswith("https://"):
-        domain = domain[8:]
-    if "/" in domain:
-        domain = domain.split("/")[0]
-    domain = domain.strip()
+    domain = normalize_domain(domain)
 
     if not domain:
         return jsonify({"error": "无效的域名格式"}), 400
@@ -398,7 +445,8 @@ def add_domain():
         return jsonify({"error": "域名已存在"}), 400
 
     domains.append(domain)
-    save_domains(domains)
+    if not save_domains(domains):
+        return jsonify({"error": "保存域名失败"}), 500
     return jsonify({"success": True, "domain": domain})
 
 # 7. 单个域名删除
@@ -414,7 +462,14 @@ def delete_domain():
         return jsonify({"error": "域名不存在"}), 404
 
     domains.remove(domain)
-    save_domains(domains)
+    if not save_domains(domains):
+        return jsonify({"error": "保存域名失败"}), 500
+    from src.monitor import load_state, save_state
+    state = load_state()
+    if domain in state:
+        del state[domain]
+        if not config.TEST_MODE and not save_state(state):
+            return jsonify({"error": "域名已删除，但清理检测状态失败"}), 500
     return jsonify({"success": True})
 
 # 7.1 单个域名修改更新
@@ -427,15 +482,7 @@ def update_domain():
     if not old_domain or not new_domain:
         return jsonify({"error": "原域名和新域名不能为空"}), 400
 
-    # 清洗新域名
-    new_domain = new_domain.split("#")[0].strip()
-    if new_domain.startswith("http://"):
-        new_domain = new_domain[7:]
-    elif new_domain.startswith("https://"):
-        new_domain = new_domain[8:]
-    if "/" in new_domain:
-        new_domain = new_domain.split("/")[0]
-    new_domain = new_domain.strip()
+    new_domain = normalize_domain(new_domain)
 
     if not new_domain:
         return jsonify({"error": "无效的新域名格式"}), 400
@@ -449,17 +496,21 @@ def update_domain():
 
     idx = domains.index(old_domain)
     domains[idx] = new_domain
-    save_domains(domains)
-
-    # 迁移状态记录
-    from src.monitor import load_state, save_state
-    state = load_state()
-    if old_domain in state:
-        state[new_domain] = state.pop(old_domain)
-        save_state(state)
+    if not save_domains(domains):
+        return jsonify({"error": "保存域名失败"}), 500
 
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
     ssl_info = check_ssl(new_domain, info, warn, crit)
+
+    # 新域名需要重新建立告警状态，不能继承原域名的通知记录。
+    from src.monitor import load_state, save_state
+    state = load_state()
+    if new_domain != old_domain:
+        state.pop(old_domain, None)
+    cache_ssl_result(state, new_domain, ssl_info)
+    if not config.TEST_MODE:
+        if not save_state(state):
+            return jsonify({"error": "保存检测状态失败"}), 500
 
     log_ok(f"Domain updated from '{old_domain}' to '{new_domain}' by user '{session.get('username')}'")
     return jsonify({"success": True, "domain": new_domain, "ssl": ssl_info})
@@ -476,33 +527,32 @@ def import_domains():
     domains = get_domains()
     added_count = 0
     duplicate_count = 0
+    invalid_count = 0
 
     for line in lines:
-        cleaned = line.split("#")[0].strip()
-        if not cleaned:
+        if not line.split('#', 1)[0].strip():
             continue
-        if cleaned.startswith("http://"):
-            cleaned = cleaned[7:]
-        elif cleaned.startswith("https://"):
-            cleaned = cleaned[8:]
-        if "/" in cleaned:
-            cleaned = cleaned.split("/")[0]
-        cleaned = cleaned.strip()
+        cleaned = normalize_domain(line)
+        if not cleaned:
+            invalid_count += 1
+            continue
 
-        if cleaned and cleaned not in domains:
+        if cleaned not in domains:
             domains.append(cleaned)
             added_count += 1
         elif cleaned in domains:
             duplicate_count += 1
 
     if added_count > 0:
-        save_domains(domains)
+        if not save_domains(domains):
+            return jsonify({"error": "保存域名失败"}), 500
 
     log_ok(f"Batch domains imported by user '{session.get('username')}': added {added_count}, skipped {duplicate_count}")
     return jsonify({
         "success": True,
         "added_count": added_count,
         "duplicate_count": duplicate_count,
+        "invalid_count": invalid_count,
         "total_count": len(domains)
     })
 
@@ -512,8 +562,16 @@ def check_single_domain():
     domain = request.args.get('domain', '').strip()
     if not domain:
         return jsonify({"error": "域名不能为空"}), 400
+    if domain not in get_domains():
+        return jsonify({"error": "域名不存在"}), 404
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
     ssl_info = check_ssl(domain, info, warn, crit)
+    if not config.TEST_MODE:
+        from src.monitor import load_state, save_state
+        state = load_state()
+        cache_ssl_result(state, domain, ssl_info)
+        if not save_state(state):
+            return jsonify({"error": "保存检测状态失败"}), 500
     return jsonify({"domain": domain, "ssl": ssl_info})
 
 # 10. 系统参数配置读取
@@ -557,6 +615,19 @@ def get_settings():
 def save_settings():
     new_cfg = request.get_json() or {}
 
+    try:
+        if 'smtp_port' in new_cfg and not 1 <= int(new_cfg['smtp_port']) <= 65535:
+            raise ValueError('SMTP 端口必须在 1 至 65535 之间')
+        thresholds = [
+            int(new_cfg.get('alert_info_days', config.ALERT_INFO_DAYS)),
+            int(new_cfg.get('alert_warning_days', config.ALERT_WARNING_DAYS)),
+            int(new_cfg.get('alert_critical_days', config.ALERT_CRITICAL_DAYS)),
+        ]
+        if not (thresholds[0] >= thresholds[1] >= thresholds[2] >= 0):
+            raise ValueError('告警天数须满足提醒 ≥ 警告 ≥ 严重 ≥ 0')
+    except (TypeError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
     old_cfg = {}
     if os.path.exists(config.CONFIG_FILE):
         try:
@@ -577,11 +648,9 @@ def save_settings():
         if field in new_cfg:
             merged_cfg[field] = new_cfg[field]
 
-    smtp_pass = new_cfg.get('smtp_pass', '')
-    if smtp_pass == '******':
-        merged_cfg['smtp_pass'] = old_cfg.get('smtp_pass', '')
-    else:
-        merged_cfg['smtp_pass'] = smtp_pass
+    if 'smtp_pass' in new_cfg:
+        smtp_pass = new_cfg['smtp_pass']
+        merged_cfg['smtp_pass'] = old_cfg.get('smtp_pass', '') if smtp_pass == '******' else smtp_pass
 
     # 原子保存
     if atomic_write_file(config.CONFIG_FILE, merged_cfg, is_json=True):
@@ -630,7 +699,12 @@ def test_settings_email():
     
     data = request.get_json() or {}
     host = data.get('smtp_host', '').strip()
-    port = int(data.get('smtp_port', '465'))
+    try:
+        port = int(data.get('smtp_port', '465'))
+        if not 1 <= port <= 65535:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({"error": "SMTP 端口必须在 1 至 65535 之间"}), 400
     user = data.get('smtp_user', '').strip()
     password = data.get('smtp_pass', '')
     email_to = data.get('email_to', '').strip()
@@ -662,7 +736,7 @@ def test_settings_email():
     msg.attach(MIMEText(text_body, 'plain', 'utf-8'))
     
     try:
-        server = smtplib.SMTP_SSL(host, port) if port in [465, 994] else smtplib.SMTP(host, port)
+        server = smtplib.SMTP_SSL(host, port, timeout=10) if port in [465, 994] else smtplib.SMTP(host, port, timeout=10)
         if port not in [465, 994]:
             server.starttls()
         server.login(user, password)

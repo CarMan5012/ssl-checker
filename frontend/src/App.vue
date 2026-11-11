@@ -80,6 +80,16 @@
       </div>
     </header>
 
+    <div v-if="monitorStatus.last_error || monitorStatus.failed_domains" class="monitor-status-alert" role="status">
+      <AlertCircle style="width: 18px; height: 18px; flex-shrink: 0;" />
+      <span>
+        {{ monitorStatus.last_error || `当前有 ${monitorStatus.failed_domains} 个域名检测失败` }}
+        <template v-if="monitorStatus.last_error && monitorStatus.failed_domains">
+          · {{ monitorStatus.failed_domains }} 个域名检测失败
+        </template>
+      </span>
+    </div>
+
     <!-- 看板大屏视图 -->
     <div v-show="currentPath === '/dashboard' || (currentPath === '/dashboard/settings' && lastActivePath === '/dashboard')" class="route-view active">
       <Dashboard :domains="domains" :loading="domainsLoading" />
@@ -144,7 +154,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, provide } from 'vue'
+import { ref, onMounted, onUnmounted, provide } from 'vue'
 import { 
   ShieldCheck, BarChart3, Globe, LogIn, RefreshCw, Moon, Sun, Settings, LogOut,
   CheckCircle, XCircle, Info, AlertCircle 
@@ -166,6 +176,8 @@ const isSystemInitialized = ref(true)
 
 const domains = ref([])
 const domainsLoading = ref(false)
+const monitorStatus = ref({ last_error: null, failed_domains: 0 })
+let monitorStatusTimer = null
 const theme = ref('dark')
 
 const toasts = ref([])
@@ -270,9 +282,20 @@ const navigate = (path, push = true) => {
 }
 
 // API 数据交互
+const loadMonitorStatus = async () => {
+  try {
+    const res = await fetch('/api/monitor/status')
+    if (!res.ok) throw new Error('状态接口不可用')
+    monitorStatus.value = await res.json()
+  } catch (e) {
+    monitorStatus.value = { last_error: '无法获取巡检状态，请检查服务连接', failed_domains: 0 }
+  }
+}
+
 const checkAuthStatus = async () => {
   try {
     const res = await fetch("/api/auth/status")
+    if (!res.ok) throw new Error('认证状态接口不可用')
     const data = await res.json()
     
     isSystemInitialized.value = data.has_users
@@ -295,7 +318,8 @@ const loadDomains = async (isManual = false) => {
     domains.value = await res.json()
     
     if (isManual) {
-      showToast("已重新扫描获取全量域名状态")
+      const failed = domains.value.filter(item => !item.ssl.success).length
+      showToast(failed ? `扫描完成，${failed} 个域名检测失败，详情见列表` : "已重新扫描获取全量域名状态", failed ? 'error' : 'success')
     }
   } catch (e) {
     if (e.message !== "Unauthorized") {
@@ -303,6 +327,7 @@ const loadDomains = async (isManual = false) => {
     }
   } finally {
     domainsLoading.value = false
+    loadMonitorStatus()
   }
 }
 
@@ -325,6 +350,8 @@ const handleLogout = async () => {
       loggedIn.value = false
       closeSettingsDrawer()
       navigate('/dashboard')
+    } else {
+      showToast('注销失败，请重试', 'error')
     }
   } catch (e) {
     showToast("退出登录请求失败", "error")
@@ -356,9 +383,15 @@ const onSettingsSaved = (needRefreshList) => {
 onMounted(() => {
   initTheme()
   checkAuthStatus()
+  loadMonitorStatus()
+  monitorStatusTimer = window.setInterval(loadMonitorStatus, 60000)
 
   window.addEventListener('popstate', () => {
     navigate(window.location.pathname, false)
   })
+})
+
+onUnmounted(() => {
+  if (monitorStatusTimer) window.clearInterval(monitorStatusTimer)
 })
 </script>

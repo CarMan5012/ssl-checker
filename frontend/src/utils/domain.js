@@ -23,14 +23,9 @@ export function parseDomain(d) {
         }
     }
 
-    // 处理普通 IPv6 地址，包含多个冒号且无方括号
+    // 未加方括号的 IPv6 地址不包含端口；带端口必须使用 [地址]:端口。
     const colonCount = (clean.match(/:/g) || []).length;
     if (colonCount > 1) {
-        const lastColon = clean.lastIndexOf(":");
-        const lastPart = clean.substring(lastColon + 1);
-        if (/^\d+$/.test(lastPart)) {
-            return { host: clean.substring(0, lastColon), port: lastPart };
-        }
         return { host: clean, port: "443" };
     }
 

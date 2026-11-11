@@ -1,6 +1,10 @@
 import os
 import json
+import tempfile
+import threading
 from src.utils.logger import log_error
+
+_replace_lock = threading.Lock()
 
 def atomic_write_file(file_path, content, is_json=False):
     """
@@ -18,21 +22,24 @@ def atomic_write_file(file_path, content, is_json=False):
             log_error(f"创建目录 {dir_name} 失败: {e}")
             return False
 
-    temp_file = os.path.join(dir_name, os.path.basename(file_path) + ".tmp")
+    temp_file = None
     try:
-        if is_json:
-            with open(temp_file, 'w', encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=dir_name,
+                                         prefix=os.path.basename(file_path) + '.',
+                                         suffix='.tmp', delete=False) as f:
+            temp_file = f.name
+            if is_json:
                 json.dump(content, f, indent=4, ensure_ascii=False)
-        else:
-            with open(temp_file, 'w', encoding='utf-8') as f:
+            else:
                 f.write(content)
         
         # 原子替换
-        os.replace(temp_file, file_path)
+        with _replace_lock:
+            os.replace(temp_file, file_path)
         return True
     except Exception as e:
         log_error(f"原子写入文件失败 {file_path}: {e}")
-        if os.path.exists(temp_file):
+        if temp_file and os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
             except Exception:

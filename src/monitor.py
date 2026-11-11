@@ -2,9 +2,7 @@ import os
 import datetime
 import smtplib
 import requests
-import schedule
 import time
-import random
 import hmac
 import hashlib
 import base64
@@ -13,7 +11,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import src.utils.config as config
-from src.utils.logger import Colors, log_system, log_info, log_ok, log_warn, log_alert, log_error
+from src.utils.logger import log_system, log_info, log_ok, log_warn, log_alert, log_error
 from src.utils.file_io import atomic_write_file
 from src.utils.cert import check_ssl
 
@@ -22,8 +20,10 @@ LEVEL_WEIGHT = {
     "正常": 0,
     "提醒": 1,
     "警告": 2,
-    "严重": 3
+    "严重": 3,
+    "失败": 4
 }
+RUNTIME_ERROR = None
 
 # ---------------------------------------------------------
 # 状态管理
@@ -42,15 +42,29 @@ def load_state():
 def save_state(state):
     """保存告警状态到本地 JSON (测试模式下不调用此函数)"""
     if config.TEST_MODE: 
+        return False
+    return atomic_write_file(config.STATE_FILE, state, is_json=True)
+
+def record_monitor_error(message):
+    global RUNTIME_ERROR
+    RUNTIME_ERROR = message
+    if config.TEST_MODE:
         return
-    atomic_write_file(config.STATE_FILE, state, is_json=True)
+    state = load_state()
+    meta = state.get('__meta__')
+    if not isinstance(meta, dict):
+        meta = state['__meta__'] = {}
+    meta['last_error'] = message
+    meta['last_run_at'] = datetime.datetime.now().isoformat(timespec='seconds')
+    if not save_state(state):
+        log_error("无法保存巡检异常状态")
 
 # ---------------------------------------------------------
 # 通知模块
 # ---------------------------------------------------------
 def send_email_alert(alerts):
     if not config.SMTP_HOST or not config.SMTP_USER or not config.EMAIL_TO: 
-        return
+        return None
 
     subject_prefix = "[TEST] " if config.TEST_MODE else ""
     msg = MIMEMultipart()
@@ -91,7 +105,7 @@ def send_email_alert(alerts):
     msg.attach(MIMEText(html, 'html', 'utf-8'))
 
     try:
-        server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT) if config.SMTP_PORT in [465, 994] else smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT)
+        server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT, timeout=10) if config.SMTP_PORT in [465, 994] else smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=10)
         if config.SMTP_PORT not in [465, 994]: 
             server.starttls()
         server.login(config.SMTP_USER, config.SMTP_PASS)
@@ -99,8 +113,10 @@ def send_email_alert(alerts):
         server.sendmail(config.SMTP_USER, recipients, msg.as_string())
         server.quit()
         log_info("邮件告警发送成功")
+        return True
     except Exception as e:
         log_error(f"邮件发送失败: {e}")
+        return False
 
 def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
     wh = webhook if webhook is not None else config.DINGTALK_WEBHOOK
@@ -144,14 +160,13 @@ def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
         res = requests.post(url, json=data, timeout=10)
         
         # 尝试解析钉钉返回的 JSON
-        res_json = {}
         try:
             res_json = res.json()
         except Exception:
-            pass
+            res_json = None
 
-        errcode = res_json.get("errcode", 0)
-        errmsg = res_json.get("errmsg", "")
+        errcode = res_json.get("errcode") if isinstance(res_json, dict) else None
+        errmsg = res_json.get("errmsg", "") if isinstance(res_json, dict) else ""
 
         if res.status_code != 200 or errcode != 0:
             err_msg = f"HTTP {res.status_code}, errcode: {errcode}, errmsg: {errmsg}, Response: {res.text}"
@@ -167,7 +182,7 @@ def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
 
 def send_dingtalk_alert(alerts):
     if not config.DINGTALK_WEBHOOK: 
-        return
+        return None
     
     title_prefix = "[TEST] " if config.TEST_MODE else ""
     
@@ -193,7 +208,8 @@ def send_dingtalk_alert(alerts):
         text += f"{emoji_detail}**{detail_label}:** {a['detail']}\n\n"
 
     data = {"msgtype": "markdown", "markdown": {"title": "SSL证书巡检报告", "text": text}}
-    post_to_dingtalk(data)
+    success, _ = post_to_dingtalk(data)
+    return success
 
 def send_system_error_alert(error_msg, file_path=None):
     """当发生严重系统配置错误时（如找不到域名列表），发送紧急通知"""
@@ -245,7 +261,7 @@ def check_is_workday():
 # ---------------------------------------------------------
 # 任务执行逻辑
 # ---------------------------------------------------------
-def run_task():
+def run_task(retry_only=False):
     # 每次运行任务时重新从磁盘重载全局配置参数
     config.load_all_configs()
     
@@ -256,6 +272,7 @@ def run_task():
         err = "找不到配置文件"
         log_error(f"{err}: {abs_path}")
         send_system_error_alert(err, abs_path)
+        record_monitor_error("域名列表文件不存在")
         return
 
     domains = []
@@ -269,13 +286,21 @@ def run_task():
         err = "配置文件内容为空，未发现有效域名"
         log_error(f"{err}: {abs_path}")
         send_system_error_alert(err, abs_path)
+        record_monitor_error("域名列表为空")
         return
 
-    log_system(f"成功加载 {len(domains)} 个待检测域名: {', '.join(domains)}")
-
-    alerts = []
+    email_alerts = []
+    dingtalk_alerts = []
     state = load_state()
     state_changed = False
+    now = datetime.datetime.now()
+    if retry_only:
+        domains = [domain for domain in domains if isinstance(state.get(domain), dict)
+                   and state[domain].get('retry_at')
+                   and datetime.datetime.fromisoformat(state[domain]['retry_at']) <= now]
+        if not domains:
+            return
+    log_system(f"开始检测 {len(domains)} 个域名: {', '.join(domains)}")
 
     # 获取今日工作属性
     is_today_workday = check_is_workday()
@@ -294,133 +319,117 @@ def run_task():
         days = ssl_info.get("days")
         expire_time = ssl_info.get("expire") if ssl_info.get("success") else ssl_info.get("error", "未知错误")
 
-        # 获取上次告警状态
-        last_state = state.get(domain, "正常")
-        if isinstance(last_state, dict):
-            last_level = last_state.get('level', '正常')
-            last_was_holiday = last_state.get('is_holiday', False)
-        else:
-            last_level = last_state
-            last_was_holiday = False
-        
-        # 判断是否需要发送告警
-        should_alert = False
-        
-        if config.TEST_MODE:
-            should_alert = True
-        elif level != "正常":
-            # 逻辑 A: 等级升级了
-            if LEVEL_WEIGHT[level] > LEVEL_WEIGHT[last_level]:
-                should_alert = True
-            # 逻辑 B: 工作日“补发”非工作日的未处理告警
-            elif is_today_workday and last_was_holiday:
-                should_alert = True
-                log_info(f"{domain} 为节假日遗留告警，今日工作日执行补发提醒")
+        last_state = state.get(domain, {})
+        if not isinstance(last_state, dict):
+            last_state = {'level': last_state}
+        last_level = last_state.get('level', '正常')
+        legacy_alert_level = last_state.get('alert_level', last_level)
+        last_was_holiday = last_state.get('is_holiday', False)
+        alert = {'domain': domain, 'days': days, 'detail': expire_time,
+                 'level': level, 'color': color}
+        channel_alerts = (
+            ('email', bool(config.SMTP_HOST and config.SMTP_USER and config.EMAIL_TO), email_alerts),
+            ('dingtalk', bool(config.DINGTALK_WEBHOOK), dingtalk_alerts),
+        )
+        for channel, enabled, pending in channel_alerts:
+            previous_level = last_state.get(f'{channel}_alert_level', legacy_alert_level)
+            if enabled and (config.TEST_MODE or (level != '正常' and (
+                LEVEL_WEIGHT.get(level, 0) > LEVEL_WEIGHT.get(previous_level, 0)
+                or (is_today_workday and last_was_holiday)
+            ))):
+                pending.append(alert)
 
-        if should_alert:
-            alerts.append({
-                'domain': domain, 'days': days, 'detail': expire_time,
-                'level': level, 'color': color
-            })
+        if alert in email_alerts or alert in dingtalk_alerts:
             log_alert(f"{domain} 触发通知: {level} (今日工作日: {is_today_workday})")
             
-            if not config.TEST_MODE:
-                existing_alert_time = ""
-                existing_is_holiday = False
-                if isinstance(last_state, dict):
-                    existing_alert_time = last_state.get("alert_time", "")
-                    existing_is_holiday = last_state.get("is_holiday", False)
-                    
-                if level != last_level:
-                    current_alert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    current_alert_time = existing_alert_time or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    
-                state[domain] = {
-                    "level": level,
-                    "is_holiday": not is_today_workday if level != "正常" else False,
-                    "alert_time": current_alert_time,
-                    "success": ssl_info.get("success", False),
-                    "days": days,
-                    "expire": expire_time,
-                    "color": color,
-                    "ip": ssl_info.get("ip"),
-                    "issuer": ssl_info.get("issuer"),
-                    "error": ssl_info.get("error") if not ssl_info.get("success") else None
-                }
-                state_changed = True
-        else:
-            if not config.TEST_MODE:
-                existing_alert_time = ""
-                existing_is_holiday = False
-                if isinstance(last_state, dict):
-                    existing_alert_time = last_state.get("alert_time", "")
-                    existing_is_holiday = last_state.get("is_holiday", False)
-                    
-                if level != last_level:
-                    current_alert_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    current_alert_time = existing_alert_time or datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    
-                state[domain] = {
-                    "level": level,
-                    "is_holiday": not is_today_workday if level != "正常" else False,
-                    "alert_time": current_alert_time,
-                    "success": ssl_info.get("success", False),
-                    "days": days,
-                    "expire": expire_time,
-                    "color": color,
-                    "ip": ssl_info.get("ip"),
-                    "issuer": ssl_info.get("issuer"),
-                    "error": ssl_info.get("error") if not ssl_info.get("success") else None
-                }
-                state_changed = True
+        if not config.TEST_MODE:
+            count = (last_state.get('retry_count', 0) + 1) if retry_only else 0
+            retry_at = (now + datetime.timedelta(minutes=30)).isoformat() if not ssl_info.get('success') and count < 3 else None
+            state[domain] = {
+                **last_state,
+                'level': level,
+                'alert_level': legacy_alert_level,
+                'email_alert_level': last_state.get('email_alert_level', legacy_alert_level),
+                'dingtalk_alert_level': last_state.get('dingtalk_alert_level', legacy_alert_level),
+                'is_holiday': not is_today_workday if level != '正常' else False,
+                'alert_time': now.strftime('%Y-%m-%d %H:%M:%S') if level != last_level else last_state.get('alert_time') or now.strftime('%Y-%m-%d %H:%M:%S'),
+                'success': ssl_info.get('success', False),
+                'days': days,
+                'expire': expire_time,
+                'color': color,
+                'ip': ssl_info.get('ip'),
+                'issuer': ssl_info.get('issuer'),
+                'display_host': ssl_info.get('display_host'),
+                'punycode_host': ssl_info.get('punycode_host'),
+                'error': ssl_info.get('error') if not ssl_info.get('success') else None,
+                'retry_count': count,
+                'retry_at': retry_at,
+            }
+            if level == '正常':
+                state[domain]['alert_level'] = '正常'
+                state[domain]['email_alert_level'] = '正常'
+                state[domain]['dingtalk_alert_level'] = '正常'
+            state_changed = True
+        if level == '正常':
             log_ok(f"{domain} 状态良好 (剩余 {days} 天)")
+        elif alert not in email_alerts and alert not in dingtalk_alerts:
+            log_info(f"{domain} 告警等级未提升: {level}")
 
-    if alerts:
-        log_system(f"巡检完毕，检测到 {len(alerts)} 个域名的告警状态有更新，正在下发通知...")
-        send_email_alert(alerts)
-        send_dingtalk_alert(alerts)
-    else:
-        log_info("巡检完毕，所有域名状态稳定，无风险等级变化")
+    delivery_errors = []
+    for channel, pending, sender in (
+        ('email', email_alerts, send_email_alert),
+        ('dingtalk', dingtalk_alerts, send_dingtalk_alert),
+    ):
+        if not pending:
+            continue
+        delivered = sender(pending)
+        if not config.TEST_MODE:
+            if delivered:
+                for alert in pending:
+                    state[alert['domain']][f'{channel}_alert_level'] = alert['level']
+            else:
+                log_warn(f"{channel} 告警未送达，将重试该通道")
+                delivery_errors.append('邮件' if channel == 'email' else '钉钉')
+                for alert in pending:
+                    entry = state[alert['domain']]
+                    if entry['retry_count'] < 3:
+                        entry['retry_at'] = (now + datetime.timedelta(minutes=30)).isoformat()
+
+    if not config.TEST_MODE:
+        meta = state.setdefault('__meta__', {})
+        meta['last_run_at'] = now.isoformat(timespec='seconds')
+        meta['last_error'] = f"{'、'.join(delivery_errors)}告警发送失败，等待重试" if delivery_errors else None
+        if not retry_only:
+            meta['last_daily_run'] = now.date().isoformat()
+        state_changed = True
 
     # 只要状态有变化（包括恢复正常），或者文件根本不存在，就执行保存
     if state_changed or not os.path.exists(config.STATE_FILE):
-        save_state(state)
+        if not save_state(state):
+            raise IOError(f"保存巡检状态失败: {config.STATE_FILE}")
         log_system(f"同步状态记录至文件: {config.STATE_FILE}")
+    global RUNTIME_ERROR
+    RUNTIME_ERROR = None
 
-    # 生产模式下，任务结束后重新计算明天的随机运行时间并排程
-    if not config.TEST_MODE:
-        schedule_next_run()
+def daily_due(now=None):
+    now = now or datetime.datetime.now()
+    if now.time() < datetime.time(9, 15):
+        return False
+    return load_state().get('__meta__', {}).get('last_daily_run') != now.date().isoformat()
 
-def schedule_next_run(silent=False):
-    """
-    精确计算下一次在明天的 09:00 - 09:59 之间的随机时间，
-    并通过单次秒级延迟调度进行排程，彻底避免 at() 方案对同一天排程时引发的重复触发与失效 Bug。
-    """
-    # 清除旧的 daily_job 排程
-    schedule.clear('daily_job')
-    
-    now = datetime.datetime.now()
-    # 锁定日期为明天
-    target_date = now.date() + datetime.timedelta(days=1)
-    
-    # 随机生成明天 09:00 - 09:59 的某个时分秒
-    random_minute = random.randint(0, 59)
-    random_second = random.randint(0, 59)
-    target_time = datetime.datetime.combine(
-        target_date,
-        datetime.time(9, random_minute, random_second)
-    )
-    
-    delay_seconds = (target_time - now).total_seconds()
-    if delay_seconds < 0:
-        # 安全防御，若极特殊情况下为负，直接推迟一天
-        delay_seconds += 86400
-        
-    # 注册单次延迟定时器任务
-    schedule.every(delay_seconds).seconds.do(run_task).tag('daily_job')
-    
-    if not silent:
-        target_time_str = target_time.strftime('%Y-%m-%d %H:%M:%S')
-        log_system(f"计划任务已排定：下一次巡检将于 {Colors.YELLOW}{target_time_str}{Colors.RESET} 执行 (延迟 {delay_seconds:.0f} 秒)")
+def retry_due(now=None):
+    now = now or datetime.datetime.now()
+    if not os.path.exists(config.LIST_FILE):
+        return False
+    with open(config.LIST_FILE, encoding='utf-8') as file:
+        active_domains = {line.split('#')[0].strip() for line in file}
+    state = load_state()
+    for domain in active_domains:
+        entry = state.get(domain)
+        if isinstance(entry, dict) and entry.get('retry_at'):
+            try:
+                if datetime.datetime.fromisoformat(entry['retry_at']) <= now:
+                    return True
+            except ValueError:
+                pass
+    return False

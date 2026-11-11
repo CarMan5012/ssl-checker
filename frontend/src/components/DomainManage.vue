@@ -302,7 +302,10 @@ const refreshSingle = async (domainStr) => {
     const res = await apiFetch(`/api/domains/check?domain=${encodeURIComponent(domainStr)}`, {}, triggerOnUnauthorized)
     if (!res) return
     
-    if (!res.ok) throw new Error("检查失败")
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      throw new Error(error.error || "检查失败")
+    }
     const freshItem = await res.json()
     
     // 更新本地列表对应域名状态
@@ -311,10 +314,15 @@ const refreshSingle = async (domainStr) => {
       emit('update-domain', freshItem)
     }
     
-    showToast(`域名 ${parseDomain(domainStr).host} 已独立刷新完成`)
+    showToast(
+      freshItem.ssl.success
+        ? `域名 ${parseDomain(domainStr).host} 已独立刷新完成`
+        : `域名 ${parseDomain(domainStr).host} 检测失败：${freshItem.ssl.error || '未知错误'}`,
+      freshItem.ssl.success ? 'success' : 'error'
+    )
   } catch (e) {
     if (e.message !== "Unauthorized") {
-      showToast(`刷新域名失败`, "error")
+      showToast(`刷新域名失败：${e.message}`, "error")
     }
   } finally {
     singleLoadingMap[domainStr] = false

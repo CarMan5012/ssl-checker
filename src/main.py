@@ -7,29 +7,36 @@ if parent_dir not in sys.path:
 
 import threading
 import time
-import schedule
+import datetime
 
 from src.utils.logger import log_system
+import src.utils.config as config
 from src.app import app
-from src.monitor import run_task
+from src.monitor import run_task, daily_due, retry_due, record_monitor_error
 
 def monitor_loop():
     log_system("定时巡检后台 Daemon 线程已启动...")
-    
-    # 启动时立即执行一次巡检自检，生成初版数据
-    try:
-        run_task()
-    except Exception as e:
-        log_system(f"启动全量自检异常: {e}")
-        
+    next_attempt = datetime.datetime.min
     while True:
-        try:
-            schedule.run_pending()
-        except Exception as e:
-            log_system(f"定时调度运行发生异常: {e}")
+        now = datetime.datetime.now()
+        if now >= next_attempt:
+            try:
+                if daily_due(now):
+                    run_task()
+                    next_attempt = now + datetime.timedelta(minutes=30)
+                elif retry_due(now):
+                    run_task(retry_only=True)
+                    next_attempt = now + datetime.timedelta(minutes=1)
+            except Exception as e:
+                log_system(f"巡检调度运行发生异常: {e}")
+                record_monitor_error("巡检任务异常，请查看服务日志")
+                next_attempt = now + datetime.timedelta(minutes=5)
         time.sleep(2)
 
 def main():
+    if config.TEST_MODE:
+        run_task()
+        return
     # 1. 启动后台定时检测 Daemon 线程
     t = threading.Thread(target=monitor_loop, name="SSL_Monitor_Daemon", daemon=True)
     t.start()

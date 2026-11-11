@@ -76,7 +76,10 @@ const executeImport = async () => {
 
     const data = await res.json()
     if (res.ok) {
-      showToast(`成功导入 ${data.added_count} 个域名，过滤 ${data.duplicate_count} 个重复值`)
+      showToast(
+        `成功导入 ${data.added_count} 个域名，过滤 ${data.duplicate_count} 个重复值${data.invalid_count ? `，跳过 ${data.invalid_count} 个无效值` : ''}`,
+        data.invalid_count ? 'error' : 'success'
+      )
       emit('imported')
       close()
     } else {

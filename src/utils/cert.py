@@ -32,15 +32,8 @@ def parse_domain_and_port(domain_str):
 
     # 普通 IPv6 地址但没有端口，例如 2001:db8::1（包含了多个冒号，但没有方括号）
     if domain_str.count(":") > 1:
-        # 尝试检查最后一部分是不是端口
-        parts = domain_str.rsplit(":", 1)
-        try:
-            port = int(parts[1])
-            hostname = parts[0]
-        except ValueError:
-            hostname = domain_str
-            port = 443
-        return hostname, port
+        # 未加方括号的 IPv6 地址没有端口；端口必须使用 [地址]:端口。
+        return domain_str, 443
 
     # 普通域名/IPv4 且带端口，例如 example.com:8080 或 127.0.0.1:8080
     if ":" in domain_str:

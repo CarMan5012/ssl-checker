@@ -316,6 +316,7 @@ const loadSettings = async () => {
   try {
     const res = await apiFetch("/api/settings", {}, triggerOnUnauthorized)
     if (!res) return
+    if (!res.ok) throw new Error('配置接口不可用')
     const data = await res.json()
     originalSettings.value = JSON.parse(JSON.stringify(data))
     
