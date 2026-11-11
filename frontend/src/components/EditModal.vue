@@ -5,7 +5,7 @@
         <div class="modal-header-icon" style="background:var(--primary-glow); color:var(--primary-color);">
           <Edit2 style="width: 20px; height: 20px;" />
         </div>
-        <div class="modal-title">修改监控域名</div>
+        <div class="modal-title">编辑域名与备注</div>
       </div>
       <div class="modal-body" style="margin-bottom:20px;">
         <div style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;">
@@ -18,7 +18,8 @@
             type="text" 
             v-model="editDomainInput" 
             :class="['input-field', { invalid: !isValid }]" 
-            placeholder="如 example.com 或 example.com:8443" 
+            placeholder="example.com 或 example.com:8443"
+            aria-label="监控域名及端口"
             @keyup.enter="handleSave"
             @input="validate"
           >
@@ -26,6 +27,18 @@
         </div>
         <div style="font-size: 11px; color: var(--text-muted);">
           原配置: <code style="font-weight: bold; color: var(--text-color);">{{ targetDomain }}</code>
+        </div>
+        <div class="form-group" style="margin-top: 18px; margin-bottom: 0;">
+          <label class="form-label" for="edit-domain-remark">备注</label>
+          <input
+            id="edit-domain-remark"
+            v-model="editRemarkInput"
+            type="text"
+            class="input-field"
+            maxlength="200"
+            placeholder="填写用途、负责人等"
+            @keyup.enter="handleSave"
+          >
         </div>
       </div>
       <div class="modal-footer">
@@ -53,6 +66,10 @@ const props = defineProps({
   targetDomain: {
     type: String,
     default: ''
+  },
+  targetRemark: {
+    type: String,
+    default: ''
   }
 })
 
@@ -62,12 +79,14 @@ const showToast = inject('showToast', (msg) => alert(msg))
 const triggerOnUnauthorized = inject('triggerOnUnauthorized')
 
 const editDomainInput = ref('')
+const editRemarkInput = ref('')
 const isValid = ref(true)
 const loading = ref(false)
 
 watch(() => props.show, (newVal) => {
   if (newVal) {
     editDomainInput.value = props.targetDomain || ''
+    editRemarkInput.value = props.targetRemark || ''
     isValid.value = true
   }
 })
@@ -100,9 +119,10 @@ const handleSave = async () => {
   }
 
   const newDomainStr = editDomainInput.value.trim()
+  const newRemark = editRemarkInput.value.trim()
   if (!newDomainStr) return
 
-  if (newDomainStr === props.targetDomain) {
+  if (newDomainStr === props.targetDomain && newRemark === props.targetRemark) {
     close()
     return
   }
@@ -114,7 +134,8 @@ const handleSave = async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         old_domain: props.targetDomain,
-        new_domain: newDomainStr
+        new_domain: newDomainStr,
+        remark: newRemark
       })
     }, triggerOnUnauthorized)
     
@@ -122,9 +143,9 @@ const handleSave = async () => {
 
     const data = await res.json()
     if (res.ok) {
-      showToast(`域名成功修改为 ${data.domain}`, 'success')
+      showToast(data.domain === props.targetDomain ? '备注已更新' : `域名成功修改为 ${data.domain}`, 'success')
       emit('updated', data)
-      close()
+      emit('close')
     } else {
       showToast(data.error || "修改失败", "error")
     }

@@ -318,7 +318,7 @@ const loadDomains = async (isManual = false) => {
     domains.value = await res.json()
     
     if (isManual) {
-      const failed = domains.value.filter(item => !item.ssl.success).length
+      const failed = domains.value.filter(item => item.enabled !== false && !item.ssl.success).length
       showToast(failed ? `扫描完成，${failed} 个域名检测失败，详情见列表` : "已重新扫描获取全量域名状态", failed ? 'error' : 'success')
     }
   } catch (e) {
@@ -338,7 +338,7 @@ const handleConfirmDelete = (domain) => {
 const handleUpdateDomain = (freshItem) => {
   const index = domains.value.findIndex(item => item.domain === freshItem.domain)
   if (index !== -1) {
-    domains.value[index] = freshItem
+    domains.value[index] = { ...domains.value[index], ...freshItem }
   }
 }
 

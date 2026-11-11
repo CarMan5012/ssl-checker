@@ -230,7 +230,8 @@ def check_ssl(domain_with_port, info_days=14, warn_days=7, crit_days=3):
         if not ip_address:
             ip_address = resolve_ip(encoded_hostname)
         error_msg = str(e).split('] ')[-1]
-        log_error(f"获取 {hostname}:{port} 证书失败: {error_msg}")
+        log_error("获取证书失败", domain=hostname, port=port,
+                  error_type=type(e).__name__, reason=error_msg)
         return {
             "success": False,
             "error": error_msg,

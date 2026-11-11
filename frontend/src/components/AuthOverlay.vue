@@ -16,6 +16,7 @@
           v-model="username" 
           class="input-field" 
           placeholder="管理员用户名"
+          aria-label="管理员用户名"
           @keyup.enter="submit"
         >
       </div>
@@ -26,6 +27,7 @@
           v-model="password" 
           class="input-field" 
           placeholder="密码"
+          aria-label="密码"
           @keyup.enter="submit"
         >
         <button class="eye-btn" type="button" @click="showPassword = !showPassword">

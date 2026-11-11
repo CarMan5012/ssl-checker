@@ -9,10 +9,12 @@ import threading
 import time
 import datetime
 
-from src.utils.logger import log_system
+from src.utils.logger import log_system, log_error, configure_json_logging
+configure_json_logging()
 import src.utils.config as config
 from src.app import app
 from src.monitor import run_task, daily_due, retry_due, record_monitor_error
+from waitress import serve
 
 def monitor_loop():
     log_system("定时巡检后台 Daemon 线程已启动...")
@@ -28,12 +30,16 @@ def monitor_loop():
                     run_task(retry_only=True)
                     next_attempt = now + datetime.timedelta(minutes=1)
             except Exception as e:
-                log_system(f"巡检调度运行发生异常: {e}")
+                log_error("巡检调度运行异常", error_type=type(e).__name__,
+                          reason=str(e), next_retry_minutes=5, exc_info=True)
                 record_monitor_error("巡检任务异常，请查看服务日志")
                 next_attempt = now + datetime.timedelta(minutes=5)
         time.sleep(2)
 
 def main():
+    configure_json_logging()
+    app.logger.handlers.clear()
+    app.logger.propagate = True
     if config.TEST_MODE:
         run_task()
         return
@@ -44,7 +50,7 @@ def main():
     # 2. 启动前端 Flask 业务端
     port = int(os.getenv("WEB_PORT", "8080"))
     log_system(f"SSL Monitor Web Server running on http://0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    serve(app, host="0.0.0.0", port=port, threads=8)
 
 if __name__ == '__main__':
     main()

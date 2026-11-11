@@ -22,7 +22,8 @@
                 v-model="form.dingtalk_webhook" 
                 :class="['input-field', { 'is-error': errors.dingtalk_webhook }]" 
                 style="padding-left:12px;" 
-                placeholder="支持粘贴完整 Webhook 链接或 Token"
+                placeholder="输入 Webhook 或 Token"
+                aria-label="Webhook 地址或 Access Token"
                 @input="clearError('dingtalk_webhook')"
               >
               <div class="field-error-msg" :class="{ show: errors.dingtalk_webhook }">
@@ -38,7 +39,8 @@
                   v-model="form.dingtalk_secret" 
                   class="input-field" 
                   style="padding-left:12px;" 
-                  placeholder="配置后将自动计算加签签名"
+                  placeholder="输入加签密钥"
+                  aria-label="钉钉加签密钥"
                 >
                 <button class="eye-btn" type="button" @click="showSecret.dingtalk = !showSecret.dingtalk">
                   <EyeOff v-if="showSecret.dingtalk" style="width: 14px; height: 14px;" />
@@ -53,7 +55,8 @@
                 v-model="form.dingtalk_keyword" 
                 class="input-field" 
                 style="padding-left:12px;" 
-                placeholder="机器人安全选项里设置的自定义字符"
+                placeholder="输入自定义关键词"
+                aria-label="钉钉自定义关键词"
               >
             </div>
             <button 
@@ -84,6 +87,7 @@
                   :class="['input-field', { 'is-error': errors.smtp_host }]" 
                   style="padding-left:12px;" 
                   placeholder="如 smtp.qq.com"
+                  aria-label="SMTP 服务器主机"
                   @input="clearError('smtp_host')"
                 >
                 <div class="field-error-msg" :class="{ show: errors.smtp_host }">
@@ -99,6 +103,7 @@
                   :class="['input-field', { 'is-error': errors.smtp_port }]" 
                   style="padding-left:12px;" 
                   placeholder="465" 
+                  aria-label="SMTP 端口"
                   min="1" 
                   max="65535"
                   @input="clearError('smtp_port')"
@@ -117,6 +122,7 @@
                 :class="['input-field', { 'is-error': errors.smtp_user }]" 
                 style="padding-left:12px;" 
                 placeholder="如 user@qq.com"
+                aria-label="发信邮箱账号"
                 @input="clearError('smtp_user')"
               >
               <div class="field-error-msg" :class="{ show: errors.smtp_user }">
@@ -132,7 +138,8 @@
                   v-model="form.smtp_pass" 
                   class="input-field" 
                   style="padding-left:12px;" 
-                  placeholder="SMTP 授权码（不填保留原密码）"
+                  placeholder="输入邮箱授权码"
+                  aria-label="邮箱授权码或密码"
                 >
                 <button class="eye-btn" type="button" @click="showSecret.smtp = !showSecret.smtp">
                   <EyeOff v-if="showSecret.smtp" style="width: 14px; height: 14px;" />
@@ -147,7 +154,8 @@
                 v-model="form.email_to" 
                 :class="['input-field', { 'is-error': errors.email_to }]" 
                 style="padding-left:12px;" 
-                placeholder="收信箱列表"
+                placeholder="输入收件人邮箱"
+                aria-label="收件人邮箱，多个用英文逗号分隔"
                 @input="clearError('email_to')"
               >
               <div class="field-error-msg" :class="{ show: errors.email_to }">
@@ -184,6 +192,7 @@
                   style="padding-left:12px;" 
                   min="1" 
                   max="365"
+                  aria-label="提醒天数"
                   @input="clearError('alert_info_days')"
                 >
                 <div class="field-error-msg" :class="{ show: errors.alert_info_days }">
@@ -200,6 +209,7 @@
                   style="padding-left:12px;" 
                   min="1" 
                   max="365"
+                  aria-label="警告天数"
                   @input="clearError('alert_warning_days')"
                 >
                 <div class="field-error-msg" :class="{ show: errors.alert_warning_days }">
@@ -216,6 +226,7 @@
                   style="padding-left:12px;" 
                   min="1" 
                   max="365"
+                  aria-label="严重天数"
                   @input="clearError('alert_critical_days')"
                 >
                 <div class="field-error-msg" :class="{ show: errors.alert_critical_days }">

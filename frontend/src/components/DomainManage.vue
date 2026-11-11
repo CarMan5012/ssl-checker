@@ -10,7 +10,8 @@
               type="text" 
               v-model="newDomain" 
               :class="['input-field', { invalid: !isInputValid }]" 
-              placeholder="输入单个域名，如 google.com" 
+              placeholder="输入域名，如 example.com"
+              aria-label="添加监控域名"
               @keyup.enter="handleAdd"
               @input="validateInput"
             >
@@ -34,7 +35,8 @@
               type="text" 
               v-model="searchManageQuery" 
               class="input-field" 
-              placeholder="过滤管理列表..." 
+              placeholder="搜索域名或备注..."
+              aria-label="搜索管理列表中的域名、IP 或备注"
             >
             <X 
               v-if="searchManageQuery" 
@@ -47,8 +49,8 @@
       </div>
 
       <!-- 可管理表格数据 -->
-      <div class="table-container">
-        <table>
+      <TableScroll ref="tableScroll">
+        <table class="monitor-table manage-table">
           <thead>
             <tr>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'domain' }" @click="handleSort('domain')">
@@ -89,11 +91,18 @@
               </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'expire' }" @click="handleSort('expire')">
                 <div class="sort-header-container">
-                  <span>过期时间 / 错误原因</span>
+                  <span>证书到期时间</span>
                   <component :is="getSortIcon('expire')" class="sort-icon" />
                 </div>
               </th>
-              <th style="width: 100px; text-align: center;">操作</th>
+              <th>检测异常</th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'remark' }" @click="handleSort('remark')">
+                <div class="sort-header-container">
+                  <span>备注</span>
+                  <component :is="getSortIcon('remark')" class="sort-icon" />
+                </div>
+              </th>
+              <th class="actions-heading">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -107,12 +116,14 @@
                 <td><div class="skeleton-bar skeleton-badge"></div></td>
                 <td><div class="skeleton-bar skeleton-days"></div></td>
                 <td><div class="skeleton-bar skeleton-date"></div></td>
+                <td><div class="skeleton-bar skeleton-date"></div></td>
+                <td><div class="skeleton-bar skeleton-date"></div></td>
                 <td><div class="skeleton-bar skeleton-port" style="margin: 0 auto;"></div></td>
               </tr>
             </template>
             <!-- 无数据提示 -->
             <tr v-else-if="filteredManageDomains.length === 0">
-              <td colspan="8" class="empty-state">
+              <td colspan="10" class="empty-state">
                 <div class="empty-icon"><ShieldAlert style="width: 44px; height: 44px;" /></div>
                 <div class="empty-title">暂无数据</div>
                 <div class="empty-desc">管理列表中无监控条目。</div>
@@ -121,94 +132,157 @@
             <!-- 真实渲染列表 -->
             <tr 
               v-else 
-              v-for="item in filteredManageDomains" 
+              v-for="item in pagedManageDomains"
               :key="item.domain" 
               :class="{ 'refreshing-row': singleLoadingMap[item.domain] }"
             >
-              <td class="domain-cell">
-                <div style="font-weight: 500;">{{ item.ssl.display_host || getParsedDomain(item.domain).host }}</div>
-                <div v-if="item.ssl.punycode_host && item.ssl.punycode_host !== (item.ssl.display_host || getParsedDomain(item.domain).host)" style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
-                  {{ item.ssl.punycode_host }}
-                </div>
+              <td class="domain-cell" :title="item.ssl.punycode_host && item.ssl.punycode_host !== (item.ssl.display_host || getParsedDomain(item.domain).host) ? `${item.ssl.display_host || getParsedDomain(item.domain).host} (${item.ssl.punycode_host})` : item.domain">
+                {{ item.ssl.display_host || getParsedDomain(item.domain).host }}
               </td>
-              <td class="ip-cell" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
+              <td class="ip-cell" :title="item.ssl.ip || ''" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
                 {{ item.ssl.ip || '-' }}
               </td>
               <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
-              <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
+              <td class="issuer-cell" :title="item.ssl.issuer || ''" style="font-size: 13px; color: var(--text-secondary);">
                 {{ item.ssl.issuer || '-' }}
               </td>
               <td>
                 <span class="badge" :class="getBadgeClass(item.ssl)">
-                  <span class="badge-dot"></span>
                   <span>{{ item.ssl.level }}</span>
                 </span>
               </td>
               <td class="days-value" :class="getDaysClass(item.ssl)">
                 {{ item.ssl.success ? `${item.ssl.days} 天` : '-' }}
               </td>
-              <td class="date-cell">{{ item.ssl.success ? item.ssl.expire : item.ssl.error }}</td>
+              <td class="date-cell" :title="item.ssl.success ? item.ssl.expire : ''">{{ item.ssl.success ? item.ssl.expire : '-' }}</td>
+              <td class="date-cell"><TableDetail v-if="item.enabled !== false && item.ssl.error" :text="item.ssl.error" label="检测异常" /></td>
+              <td class="remark-cell"><TableDetail v-if="item.remark" :text="item.remark" label="备注" /></td>
               <td style="text-align: center;">
-                <div class="action-cell">
-                  <button 
-                    class="btn-secondary btn-icon-only" 
-                    style="width:28px; height:28px; border-radius:6px;" 
+                <div class="action-cell" @pointerover="showActionTooltip" @pointerout="hideActionTooltipOnExit" @focusin="showActionTooltip" @focusout="hideActionTooltipOnExit" @click="hideActionTooltip">
+                  <button
+                    type="button"
+                    class="monitor-switch"
+                    :class="{ 'is-on': item.enabled !== false }"
+                    role="switch"
+                    :aria-checked="item.enabled !== false"
                     :disabled="singleLoadingMap[item.domain]"
-                    @click="openEdit(item.domain)" 
-                    title="编辑域名"
+                    :data-tooltip="item.enabled === false ? '启用监控' : '停用监控'"
+                    :aria-label="item.enabled === false ? '启用监控' : '停用监控'"
+                    @click="toggleEnabled(item)"
                   >
-                    <Edit2 style="width: 12px; height: 12px;" />
+                    <Loader v-if="singleLoadingMap[item.domain]" class="switch-spinner spin" aria-hidden="true" />
+                    <span v-else class="switch-thumb" aria-hidden="true"></span>
                   </button>
                   <button 
-                    class="btn-secondary btn-icon-only" 
-                    style="width:28px; height:28px; border-radius:6px;" 
+                    class="btn-icon-only domain-action-button"
                     :disabled="singleLoadingMap[item.domain]"
+                    @click="openEdit(item)"
+                    data-tooltip="编辑域名和备注"
+                    aria-label="编辑域名和备注"
+                  >
+                    <Edit2 class="action-icon" />
+                  </button>
+                  <button
+                    class="btn-icon-only domain-action-button"
                     @click="refreshSingle(item.domain)" 
-                    title="刷新该域名"
+                    :disabled="singleLoadingMap[item.domain] || item.enabled === false"
+                    data-tooltip="刷新该域名"
+                    aria-label="刷新该域名"
                   >
-                    <RefreshCw :class="{ spin: singleLoadingMap[item.domain] }" style="width: 12px; height: 12px;" />
+                    <RefreshCw :class="['action-icon', { spin: singleLoadingMap[item.domain] }]" />
                   </button>
                   <button 
-                    class="btn-danger-link" 
+                    class="btn-icon-only domain-action-button action-delete"
                     :disabled="singleLoadingMap[item.domain]"
                     @click="$emit('confirm-delete', item.domain)" 
-                    title="删除"
+                    data-tooltip="删除域名"
+                    aria-label="删除域名"
                   >
-                    <Trash2 style="width: 13px; height: 13px;" />
+                    <Trash2 class="action-icon" />
                   </button>
                 </div>
               </td>
             </tr>
           </tbody>
         </table>
-      </div>
+      </TableScroll>
+      <TablePagination
+        :total="filteredManageDomains.length"
+        :page="currentPage"
+        :page-size="pageSize"
+        page-size-id="manage-page-size"
+        @update:page="changePage"
+        @update:pageSize="changePageSize"
+      />
     </div>
 
     <!-- 编辑域名弹窗 -->
     <EditModal 
       :show="showEditModal" 
       :target-domain="editTargetDomain" 
+      :target-remark="editTargetRemark"
       @close="showEditModal = false" 
       @updated="handleEditUpdated" 
     />
+    <Teleport to="body">
+      <div
+        v-if="actionTooltip.visible"
+        class="action-tooltip"
+        :class="{ below: actionTooltip.below }"
+        :style="{ left: `${actionTooltip.left}px`, top: `${actionTooltip.top}px`, transform: actionTooltip.below ? 'translateX(-50%)' : 'translate(-50%, -100%)' }"
+        role="tooltip"
+      >{{ actionTooltip.text }}</div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, inject } from 'vue'
+import { ref, reactive, computed, inject, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import { 
   PlusCircle, Plus, ListPlus, Search, X, ShieldAlert, RefreshCw, Trash2, Loader, Edit2,
-  ChevronsUpDown, ChevronUp, ChevronDown 
+  ChevronsUpDown, ChevronUp, ChevronDown
 } from 'lucide-vue-next'
 import { parseDomain, domainRegex } from '../utils/domain'
 import { apiFetch } from '../utils/api'
 import EditModal from './EditModal.vue'
+import TableScroll from './TableScroll.vue'
+import TablePagination from './TablePagination.vue'
+import TableDetail from './TableDetail.vue'
 
 const showEditModal = ref(false)
 const editTargetDomain = ref('')
+const editTargetRemark = ref('')
+const actionTooltip = reactive({ visible: false, text: '', left: 0, top: 0, below: false })
 
-const openEdit = (domainStr) => {
-  editTargetDomain.value = domainStr
+const showActionTooltip = (event) => {
+  const button = event.target.closest?.('[data-tooltip]')
+  if (!button || !event.currentTarget.contains(button) || button.disabled) return
+  const bounds = button.getBoundingClientRect()
+  actionTooltip.text = button.dataset.tooltip
+  actionTooltip.left = Math.max(60, Math.min(window.innerWidth - 60, bounds.left + bounds.width / 2))
+  actionTooltip.below = bounds.top < 42
+  actionTooltip.top = actionTooltip.below ? bounds.bottom + 8 : bounds.top - 8
+  actionTooltip.visible = true
+}
+
+const hideActionTooltip = () => { actionTooltip.visible = false }
+const hideActionTooltipOnExit = (event) => {
+  const button = event.target.closest?.('[data-tooltip]')
+  if (!button || !button.contains(event.relatedTarget)) hideActionTooltip()
+}
+
+onMounted(() => {
+  window.addEventListener('scroll', hideActionTooltip, true)
+  window.addEventListener('resize', hideActionTooltip)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', hideActionTooltip, true)
+  window.removeEventListener('resize', hideActionTooltip)
+})
+
+const openEdit = (item) => {
+  editTargetDomain.value = item.domain
+  editTargetRemark.value = item.remark || ''
   showEditModal.value = true
 }
 
@@ -329,10 +403,33 @@ const refreshSingle = async (domainStr) => {
   }
 }
 
+const toggleEnabled = async (item) => {
+  singleLoadingMap[item.domain] = true
+  try {
+    const enabled = item.enabled === false
+    const res = await apiFetch('/api/domains/enabled', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: item.domain, enabled })
+    }, triggerOnUnauthorized)
+    if (!res) return
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || '更新失败')
+    showToast(enabled ? '已启用域名监控' : '已停用域名监控')
+    emit('refresh')
+  } catch (e) {
+    showToast(`更新监控状态失败：${e.message}`, 'error')
+  } finally {
+    singleLoadingMap[item.domain] = false
+  }
+}
+
 // 搜索与排序
 const searchManageQuery = ref('')
-const sortKey = ref('')
+const sortKey = ref('expire')
 const sortOrder = ref('asc')
+const currentPage = ref(1)
+const pageSize = ref(50)
+const tableScroll = ref(null)
 
 const getParsedDomain = (domain) => {
   return parseDomain(domain)
@@ -354,6 +451,7 @@ const getSortIcon = (key) => {
 }
 
 const getBadgeClass = (ssl) => {
+  if (ssl.level === '已停用') return 'badge-disabled'
   if (!ssl.success) return 'badge-fail'
   switch (ssl.level) {
     case '正常': return 'badge-ok'
@@ -383,9 +481,10 @@ const filteredManageDomains = computed(() => {
     const punyHost = (item.ssl.punycode_host || parsed.host).toLowerCase()
     const issuerStr = (item.ssl.issuer || '').toLowerCase()
     const ipStr = (item.ssl.ip || '').toLowerCase()
+    const remarkStr = (item.remark || '').toLowerCase()
 
     return displayHost.includes(query) || punyHost.includes(query) || 
-           parsed.port.includes(query) || issuerStr.includes(query) || ipStr.includes(query)
+           parsed.port.includes(query) || issuerStr.includes(query) || ipStr.includes(query) || remarkStr.includes(query)
   })
 
   if (sortKey.value) {
@@ -404,6 +503,9 @@ const filteredManageDomains = computed(() => {
       } else if (sortKey.value === 'issuer') {
         valA = a.ssl.issuer || ''
         valB = b.ssl.issuer || ''
+      } else if (sortKey.value === 'remark') {
+        valA = a.remark || ''
+        valB = b.remark || ''
       } else if (sortKey.value === 'status') {
         const priority = { '正常': 4, '提醒': 3, '警告': 2, '严重': 1, '失败': 0 }
         valA = a.ssl.success ? priority[a.ssl.level] : 0
@@ -412,8 +514,8 @@ const filteredManageDomains = computed(() => {
         valA = a.ssl.success ? a.ssl.days : 99999
         valB = b.ssl.success ? b.ssl.days : 99999
       } else if (sortKey.value === 'expire') {
-        valA = a.ssl.success ? a.ssl.expire : a.ssl.error
-        valB = b.ssl.success ? b.ssl.expire : b.ssl.error
+        valA = a.ssl.success && a.ssl.expire ? a.ssl.expire : '9999'
+        valB = b.ssl.success && b.ssl.expire ? b.ssl.expire : '9999'
       }
 
       if (valA < valB) return sortOrder.value === 'asc' ? -1 : 1
@@ -424,4 +526,41 @@ const filteredManageDomains = computed(() => {
 
   return list
 })
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredManageDomains.value.length / pageSize.value)))
+const pagedManageDomains = computed(() => filteredManageDomains.value.slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value))
+
+watch([searchManageQuery, sortKey, sortOrder], () => { currentPage.value = 1 })
+watch(totalPages, count => { if (currentPage.value > count) currentPage.value = count })
+
+const changePage = async page => {
+  if (page < 1 || page > totalPages.value || page === currentPage.value) return
+  currentPage.value = page
+  await nextTick()
+  tableScroll.value?.scrollToStart()
+}
+
+const changePageSize = async size => {
+  pageSize.value = size
+  currentPage.value = 1
+  await nextTick()
+  tableScroll.value?.scrollToStart()
+}
 </script>
+
+<style scoped>
+.action-tooltip {
+  position: fixed;
+  z-index: 9000;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+}
+</style>

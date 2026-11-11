@@ -59,7 +59,8 @@
               type="text" 
               v-model="searchQuery" 
               class="input-field" 
-              placeholder="过滤域名/端口..." 
+              placeholder="搜索域名或备注..."
+              aria-label="搜索监控域名、IP 或备注"
             >
             <X 
               v-if="searchQuery" 
@@ -77,8 +78,8 @@
       </div>
       
       <!-- 只读表格数据 -->
-      <div class="table-container">
-        <table>
+      <TableScroll ref="tableScroll">
+        <table class="monitor-table dashboard-table">
           <thead>
             <tr>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'domain' }" @click="handleSort('domain')">
@@ -119,8 +120,15 @@
               </th>
               <th class="sortable" :class="{ 'active-sort': sortKey === 'expire' }" @click="handleSort('expire')">
                 <div class="sort-header-container">
-                  <span>过期时间 / 错误原因</span>
+                  <span>证书到期时间</span>
                   <component :is="getSortIcon('expire')" class="sort-icon" />
+                </div>
+              </th>
+              <th>检测异常</th>
+              <th class="sortable" :class="{ 'active-sort': sortKey === 'remark' }" @click="handleSort('remark')">
+                <div class="sort-header-container">
+                  <span>备注</span>
+                  <component :is="getSortIcon('remark')" class="sort-icon" />
                 </div>
               </th>
             </tr>
@@ -136,56 +144,67 @@
                 <td><div class="skeleton-bar skeleton-badge"></div></td>
                 <td><div class="skeleton-bar skeleton-days"></div></td>
                 <td><div class="skeleton-bar skeleton-date"></div></td>
+                <td><div class="skeleton-bar skeleton-date"></div></td>
+                <td><div class="skeleton-bar skeleton-date"></div></td>
               </tr>
             </template>
             <!-- 暂无数据提示 -->
             <tr v-else-if="filteredDomains.length === 0">
-              <td colspan="7" class="empty-state">
+              <td colspan="9" class="empty-state">
                 <div class="empty-icon"><ShieldAlert style="width: 44px; height: 44px;" /></div>
                 <div class="empty-title">暂无数据</div>
                 <div class="empty-desc">没有找到符合当前过滤条件的监控条目。</div>
               </td>
             </tr>
             <!-- 真实数据渲染 -->
-            <tr v-else v-for="item in filteredDomains" :key="item.domain">
-              <td class="domain-cell">
-                <div style="font-weight: 500;">{{ item.ssl.display_host || getParsedDomain(item.domain).host }}</div>
-                <div v-if="item.ssl.punycode_host && item.ssl.punycode_host !== (item.ssl.display_host || getParsedDomain(item.domain).host)" style="font-size: 11px; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
-                  {{ item.ssl.punycode_host }}
-                </div>
+            <tr v-else v-for="item in pagedDomains" :key="item.domain">
+              <td class="domain-cell" :title="item.ssl.punycode_host && item.ssl.punycode_host !== (item.ssl.display_host || getParsedDomain(item.domain).host) ? `${item.ssl.display_host || getParsedDomain(item.domain).host} (${item.ssl.punycode_host})` : item.domain">
+                {{ item.ssl.display_host || getParsedDomain(item.domain).host }}
               </td>
-              <td class="ip-cell" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
+              <td class="ip-cell" :title="item.ssl.ip || ''" style="font-size: 13px; font-family: monospace; color: var(--text-secondary);">
                 {{ item.ssl.ip || '-' }}
               </td>
               <td class="port-cell">{{ getParsedDomain(item.domain).port }}</td>
-              <td class="issuer-cell" style="font-size: 13px; color: var(--text-secondary);">
+              <td class="issuer-cell" :title="item.ssl.issuer || ''" style="font-size: 13px; color: var(--text-secondary);">
                 {{ item.ssl.issuer || '-' }}
               </td>
               <td>
                 <span class="badge" :class="getBadgeClass(item.ssl)">
-                  <span class="badge-dot"></span>
                   <span>{{ item.ssl.level }}</span>
                 </span>
               </td>
               <td class="days-value" :class="getDaysClass(item.ssl)">
                 {{ item.ssl.success ? `${item.ssl.days} 天` : '-' }}
               </td>
-              <td class="date-cell">{{ item.ssl.success ? item.ssl.expire : item.ssl.error }}</td>
+              <td class="date-cell" :title="item.ssl.success ? item.ssl.expire : ''">{{ item.ssl.success ? item.ssl.expire : '-' }}</td>
+              <td class="date-cell"><TableDetail v-if="item.enabled !== false && item.ssl.error" :text="item.ssl.error" label="检测异常" /></td>
+              <td class="remark-cell"><TableDetail v-if="item.remark" :text="item.remark" label="备注" /></td>
             </tr>
           </tbody>
         </table>
-      </div>
+      </TableScroll>
+      <TablePagination
+        :total="filteredDomains.length"
+        :page="currentPage"
+        :page-size="pageSize"
+        page-size-id="dashboard-page-size"
+        @update:page="changePage"
+        @update:pageSize="changePageSize"
+      />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { 
   ShieldCheck, Info, AlertTriangle, AlertOctagon, XCircle, Search, X, ShieldAlert,
   ChevronsUpDown, ChevronUp, ChevronDown 
 } from 'lucide-vue-next'
 import { parseDomain } from '../utils/domain'
+import TableScroll from './TableScroll.vue'
+import TablePagination from './TablePagination.vue'
+import TableDetail from './TableDetail.vue'
 
 const props = defineProps({
   domains: {
@@ -201,8 +220,11 @@ const props = defineProps({
 const currentFilter = ref('全部')
 const quickFilter = ref('全部')
 const searchQuery = ref('')
-const sortKey = ref('')
+const sortKey = ref('expire')
 const sortOrder = ref('asc') // 'asc' or 'desc'
+const currentPage = ref(1)
+const pageSize = ref(50)
+const tableScroll = ref(null)
 
 const getParsedDomain = (domain) => {
   return parseDomain(domain)
@@ -212,6 +234,7 @@ const getParsedDomain = (domain) => {
 const stats = computed(() => {
   let ok = 0, info = 0, warn = 0, crit = 0, fail = 0
   props.domains.forEach(item => {
+    if (item.enabled === false) return
     const ssl = item.ssl
     if (!ssl.success) {
       fail++
@@ -229,7 +252,7 @@ const stats = computed(() => {
 
 // 系统健康评分与描述
 const healthScore = computed(() => {
-  const total = props.domains.length
+  const total = props.domains.filter(item => item.enabled !== false).length
   if (total === 0) return 0
   const totalPoints = (stats.value.ok * 100) + (stats.value.info * 80) + (stats.value.warn * 50)
   return Math.round(totalPoints / total)
@@ -252,8 +275,8 @@ const healthGradient = computed(() => {
 })
 
 const healthDesc = computed(() => {
-  const total = props.domains.length
-  if (total === 0) return "系统就绪，等待导入域名数据。"
+  const total = props.domains.filter(item => item.enabled !== false).length
+  if (total === 0) return "当前没有启用的监控域名。"
   const score = healthScore.value
   if (score === 100) return `全部 ${total} 个域名的证书均安全运行中。`
   if (score >= 80) return `有证书临近过期，系统处于轻微提醒级别。`
@@ -291,6 +314,7 @@ const getSortIcon = (key) => {
 }
 
 const getBadgeClass = (ssl) => {
+  if (ssl.level === '已停用') return 'badge-disabled'
   if (!ssl.success) return 'badge-fail'
   switch (ssl.level) {
     case '正常': return 'badge-ok'
@@ -322,22 +346,23 @@ const filteredDomains = computed(() => {
     const punyHost = (item.ssl.punycode_host || parsed.host).toLowerCase()
     const issuerStr = (item.ssl.issuer || '').toLowerCase()
     const ipStr = (item.ssl.ip || '').toLowerCase()
+    const remarkStr = (item.remark || '').toLowerCase()
 
     const matchesSearch = displayHost.includes(query) || punyHost.includes(query) || 
-                          parsed.port.includes(query) || issuerStr.includes(query) || ipStr.includes(query)
+                          parsed.port.includes(query) || issuerStr.includes(query) || ipStr.includes(query) || remarkStr.includes(query)
     if (!matchesSearch) return false
 
     // 指标卡片过滤
     if (currentFilter.value !== '全部') {
       if (currentFilter.value === '失败') {
-        return !item.ssl.success
+        return item.enabled !== false && !item.ssl.success
       }
       return item.ssl.success && item.ssl.level === currentFilter.value
     }
 
     // 快捷 Tab 过滤 (全部 vs 需关注)
     if (quickFilter.value === '关注') {
-      return !item.ssl.success || item.ssl.level !== '正常'
+      return item.enabled !== false && (!item.ssl.success || item.ssl.level !== '正常')
     }
 
     return true
@@ -360,6 +385,9 @@ const filteredDomains = computed(() => {
       } else if (sortKey.value === 'issuer') {
         valA = a.ssl.issuer || ''
         valB = b.ssl.issuer || ''
+      } else if (sortKey.value === 'remark') {
+        valA = a.remark || ''
+        valB = b.remark || ''
       } else if (sortKey.value === 'status') {
         const priority = { '正常': 4, '提醒': 3, '警告': 2, '严重': 1, '失败': 0 }
         valA = a.ssl.success ? priority[a.ssl.level] : 0
@@ -368,8 +396,8 @@ const filteredDomains = computed(() => {
         valA = a.ssl.success ? a.ssl.days : 99999
         valB = b.ssl.success ? b.ssl.days : 99999
       } else if (sortKey.value === 'expire') {
-        valA = a.ssl.success ? a.ssl.expire : a.ssl.error
-        valB = b.ssl.success ? b.ssl.expire : b.ssl.error
+        valA = a.ssl.success && a.ssl.expire ? a.ssl.expire : '9999'
+        valB = b.ssl.success && b.ssl.expire ? b.ssl.expire : '9999'
       }
 
       if (valA < valB) return sortOrder.value === 'asc' ? -1 : 1
@@ -381,14 +409,35 @@ const filteredDomains = computed(() => {
   return list
 })
 
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredDomains.value.length / pageSize.value)))
+const pagedDomains = computed(() => filteredDomains.value.slice((currentPage.value - 1) * pageSize.value, currentPage.value * pageSize.value))
+
+watch([searchQuery, currentFilter, quickFilter, sortKey, sortOrder], () => { currentPage.value = 1 })
+watch(totalPages, count => { if (currentPage.value > count) currentPage.value = count })
+
+const changePage = async page => {
+  if (page < 1 || page > totalPages.value || page === currentPage.value) return
+  currentPage.value = page
+  await nextTick()
+  tableScroll.value?.scrollToStart()
+}
+
+const changePageSize = async size => {
+  pageSize.value = size
+  currentPage.value = 1
+  await nextTick()
+  tableScroll.value?.scrollToStart()
+}
+
 const handleBackgroundClick = (event) => {
   if (currentFilter.value === '全部' && quickFilter.value === '全部') return
   
   const isStatItem = event.target.closest('.stat-item')
   const isToolbar = event.target.closest('.toolbar')
   const isTable = event.target.closest('.table-container')
+  const isPagination = event.target.closest('.table-pagination')
   
-  if (!isStatItem && !isToolbar && !isTable) {
+  if (!isStatItem && !isToolbar && !isTable && !isPagination) {
     currentFilter.value = '全部'
     quickFilter.value = '全部'
   }

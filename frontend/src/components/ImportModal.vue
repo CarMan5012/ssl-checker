@@ -9,13 +9,14 @@
       </div>
       <div class="modal-body" style="margin-bottom:16px;">
         <p style="font-size:12px; color:var(--text-secondary); margin-bottom:10px;">
-          每行填写一个域名或带端口，支持粘贴带协议的前缀和行尾备注：
+          每行填写一个域名，可带端口或协议；# 后的行尾注释不会保存为备注。
         </p>
         <textarea 
           v-model="importText" 
           class="input-field" 
           style="height:200px; padding:12px; font-family:monospace; resize:none;" 
-          placeholder="example.com&#10;https://github.com # 备注&#10;my-server.local:8443"
+          placeholder="example.com&#10;https://github.com&#10;my-server.local:8443"
+          aria-label="批量导入域名列表"
         ></textarea>
       </div>
       <div class="modal-footer">

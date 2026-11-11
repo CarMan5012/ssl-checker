@@ -20,6 +20,8 @@ LIST_FILE = resolve_path('LIST_FILE', 'websites_list.txt')
 STATE_FILE = resolve_path('STATE_FILE', 'ssl_alert_state.json')
 CONFIG_FILE = resolve_path('CONFIG_FILE', 'config.json')
 USERS_FILE = resolve_path('USERS_FILE', 'users.json')
+DISABLED_FILE = resolve_path('DISABLED_FILE', 'disabled_domains.json')
+REMARKS_FILE = resolve_path('REMARKS_FILE', 'domain_remarks.json')
 
 # 全局配置变量，读取时请始终以 `config.VARIABLE` 形式引用以实现热重载同步
 SMTP_HOST = ''

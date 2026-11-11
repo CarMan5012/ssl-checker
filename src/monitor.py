@@ -1,5 +1,6 @@
 import os
 import datetime
+import uuid
 import smtplib
 import requests
 import time
@@ -11,9 +12,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 import src.utils.config as config
-from src.utils.logger import log_system, log_info, log_ok, log_warn, log_alert, log_error
+from src.utils.logger import log_system, log_info, log_ok, log_warn, log_alert, log_error, redact_sensitive, log_context
 from src.utils.file_io import atomic_write_file
 from src.utils.cert import check_ssl
+from src.utils.disabled import load_disabled_domains
 
 # 告警等级权重（用于判断是否“升级”）
 LEVEL_WEIGHT = {
@@ -104,6 +106,7 @@ def send_email_alert(alerts):
     html += "</table></div></body></html>"
     msg.attach(MIMEText(html, 'html', 'utf-8'))
 
+    started_at = time.monotonic()
     try:
         server = smtplib.SMTP_SSL(config.SMTP_HOST, config.SMTP_PORT, timeout=10) if config.SMTP_PORT in [465, 994] else smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=10)
         if config.SMTP_PORT not in [465, 994]: 
@@ -112,10 +115,14 @@ def send_email_alert(alerts):
         recipients = [email.strip() for email in config.EMAIL_TO.split(',') if email.strip()]
         server.sendmail(config.SMTP_USER, recipients, msg.as_string())
         server.quit()
-        log_info("邮件告警发送成功")
+        log_info("邮件告警发送成功", alert_count=len(alerts),
+                 duration_ms=round((time.monotonic() - started_at) * 1000))
         return True
     except Exception as e:
-        log_error(f"邮件发送失败: {e}")
+        log_error("邮件告警发送失败", error_type=type(e).__name__,
+                  reason=redact_sensitive(str(e)), smtp_host=config.SMTP_HOST,
+                  smtp_port=config.SMTP_PORT, alert_count=len(alerts),
+                  duration_ms=round((time.monotonic() - started_at) * 1000))
         return False
 
 def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
@@ -153,10 +160,11 @@ def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
         url = f"{url}{connector}timestamp={timestamp}&sign={sign}"
 
     # 发送请求与结果判断
+    started_at = time.monotonic()
     try:
-        if config.TEST_MODE:
-            import json
-            log_info(f"发送钉钉消息 [测试模式] - URL: {url}, Payload: {json.dumps(data, ensure_ascii=False)}")
+        endpoint = urllib.parse.urlsplit(url).hostname
+        log_info("发送钉钉消息", endpoint=endpoint, msgtype=data.get('msgtype'),
+                 signed=bool(sec), test_mode=config.TEST_MODE)
         res = requests.post(url, json=data, timeout=10)
         
         # 尝试解析钉钉返回的 JSON
@@ -165,19 +173,24 @@ def post_to_dingtalk(data, webhook=None, secret=None, keyword=None):
         except Exception:
             res_json = None
 
-        errcode = res_json.get("errcode") if isinstance(res_json, dict) else None
-        errmsg = res_json.get("errmsg", "") if isinstance(res_json, dict) else ""
-
+        raw_errcode = res_json.get("errcode") if isinstance(res_json, dict) else None
+        errcode = raw_errcode if isinstance(raw_errcode, int) and not isinstance(raw_errcode, bool) else None
         if res.status_code != 200 or errcode != 0:
-            err_msg = f"HTTP {res.status_code}, errcode: {errcode}, errmsg: {errmsg}, Response: {res.text}"
-            log_error(f"钉钉发送失败: {err_msg}")
+            err_msg = f"HTTP {res.status_code}, errcode: {errcode}"
+            log_error("钉钉发送失败", endpoint=endpoint, http_status=res.status_code,
+                      errcode=errcode, response_format='json' if isinstance(res_json, dict) else 'non_json',
+                      response_size=len(res.text or ''),
+                      duration_ms=round((time.monotonic() - started_at) * 1000))
             return False, err_msg
         else:
-            log_info(f"钉钉消息发送成功: {res.status_code}")
+            log_info("钉钉消息发送成功", endpoint=endpoint, http_status=res.status_code,
+                     duration_ms=round((time.monotonic() - started_at) * 1000))
             return True, "Success"
     except Exception as e:
-        err_msg = str(e)
-        log_error(f"钉钉发送请求发生异常: {err_msg}")
+        err_msg = redact_sensitive(str(e), extra_secrets=(wh, sec))
+        log_error("钉钉发送请求异常", endpoint=urllib.parse.urlsplit(url).hostname,
+                  error_type=type(e).__name__, reason=err_msg,
+                  duration_ms=round((time.monotonic() - started_at) * 1000))
         return False, err_msg
 
 def send_dingtalk_alert(alerts):
@@ -262,11 +275,17 @@ def check_is_workday():
 # 任务执行逻辑
 # ---------------------------------------------------------
 def run_task(retry_only=False):
+    with log_context(task_id=uuid.uuid4().hex[:12]):
+        return _run_task_impl(retry_only)
+
+
+def _run_task_impl(retry_only=False):
+    started_at = time.monotonic()
     # 每次运行任务时重新从磁盘重载全局配置参数
     config.load_all_configs()
     
     abs_path = os.path.abspath(config.LIST_FILE)
-    log_system(f"开始执行 SSL 证书巡检任务 (路径: {abs_path})")
+    log_system("开始执行 SSL 证书巡检任务", list_file=abs_path, retry_only=retry_only)
     
     if not os.path.exists(config.LIST_FILE):
         err = "找不到配置文件"
@@ -289,6 +308,8 @@ def run_task(retry_only=False):
         record_monitor_error("域名列表为空")
         return
 
+    domains = [domain for domain in domains if domain not in load_disabled_domains()]
+
     email_alerts = []
     dingtalk_alerts = []
     state = load_state()
@@ -300,11 +321,12 @@ def run_task(retry_only=False):
                    and datetime.datetime.fromisoformat(state[domain]['retry_at']) <= now]
         if not domains:
             return
-    log_system(f"开始检测 {len(domains)} 个域名: {', '.join(domains)}")
+    log_system("开始检测域名", domain_count=len(domains), retry_only=retry_only)
 
     # 获取今日工作属性
     is_today_workday = check_is_workday()
 
+    failed_count = 0
     for domain in domains:
         # 调用统一的 SSL 检测工具，传入当前热加载的阈值
         ssl_info = check_ssl(
@@ -313,6 +335,8 @@ def run_task(retry_only=False):
             config.ALERT_WARNING_DAYS, 
             config.ALERT_CRITICAL_DAYS
         )
+        if not ssl_info.get('success'):
+            failed_count += 1
         
         level = ssl_info.get("level", "正常")
         color = ssl_info.get("color", "#32CD32")
@@ -340,7 +364,8 @@ def run_task(retry_only=False):
                 pending.append(alert)
 
         if alert in email_alerts or alert in dingtalk_alerts:
-            log_alert(f"{domain} 触发通知: {level} (今日工作日: {is_today_workday})")
+            log_alert("域名触发通知", domain=domain, alert_level=level,
+                      is_workday=is_today_workday)
             
         if not config.TEST_MODE:
             count = (last_state.get('retry_count', 0) + 1) if retry_only else 0
@@ -371,9 +396,9 @@ def run_task(retry_only=False):
                 state[domain]['dingtalk_alert_level'] = '正常'
             state_changed = True
         if level == '正常':
-            log_ok(f"{domain} 状态良好 (剩余 {days} 天)")
+            log_ok("证书状态良好", domain=domain, days_remaining=days)
         elif alert not in email_alerts and alert not in dingtalk_alerts:
-            log_info(f"{domain} 告警等级未提升: {level}")
+            log_info("告警等级未提升", domain=domain, alert_level=level)
 
     delivery_errors = []
     for channel, pending, sender in (
@@ -407,9 +432,11 @@ def run_task(retry_only=False):
     if state_changed or not os.path.exists(config.STATE_FILE):
         if not save_state(state):
             raise IOError(f"保存巡检状态失败: {config.STATE_FILE}")
-        log_system(f"同步状态记录至文件: {config.STATE_FILE}")
+        log_system("同步巡检状态记录", state_file=config.STATE_FILE)
     global RUNTIME_ERROR
     RUNTIME_ERROR = None
+    log_system("SSL 证书巡检任务完成", domain_count=len(domains), failed_count=failed_count,
+               duration_ms=round((time.monotonic() - started_at) * 1000))
 
 def daily_due(now=None):
     now = now or datetime.datetime.now()
@@ -423,6 +450,7 @@ def retry_due(now=None):
         return False
     with open(config.LIST_FILE, encoding='utf-8') as file:
         active_domains = {line.split('#')[0].strip() for line in file}
+    active_domains.difference_update(load_disabled_domains())
     state = load_state()
     for domain in active_domains:
         entry = state.get(domain)

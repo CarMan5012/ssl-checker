@@ -107,7 +107,7 @@
         }
 
         .container {
-            max-width: 1200px;
+            max-width: 1680px;
             margin: 0 auto;
             position: relative;
         }
@@ -576,6 +576,67 @@
             font-size: 14px;
         }
 
+        /* 按列分配比例，窄屏在容器内滚动，不挤压状态与操作。 */
+        .monitor-table {
+            table-layout: fixed;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .dashboard-table { min-width: 1400px; }
+        .manage-table { min-width: 1660px; }
+
+        .monitor-table th,
+        .monitor-table td {
+            padding: 14px 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            vertical-align: middle;
+        }
+
+        .monitor-table th {
+            font-size: 12px;
+            letter-spacing: 0.015em;
+        }
+
+        .monitor-table tbody tr:not(.skeleton-row) { height: 62px; }
+        .monitor-table .domain-cell { font-weight: 600; }
+        .monitor-table .date-cell { font-size: 12px; }
+        .monitor-table .remark-cell { color: var(--text-secondary); font-size: 13px; }
+        .monitor-table .actions-heading { text-align: center; }
+
+        .monitor-table th:nth-child(3),
+        .monitor-table td:nth-child(3),
+        .monitor-table th:nth-child(5),
+        .monitor-table td:nth-child(5),
+        .monitor-table th:nth-child(6),
+        .monitor-table td:nth-child(6),
+        .monitor-table th:nth-child(8),
+        .monitor-table td:nth-child(8),
+        .monitor-table th:nth-child(9),
+        .monitor-table td:nth-child(9) { text-align: center; }
+
+        .dashboard-table th:nth-child(1) { width: 22%; }
+        .dashboard-table th:nth-child(2) { width: 12%; }
+        .dashboard-table th:nth-child(3) { width: 5%; }
+        .dashboard-table th:nth-child(4) { width: 15%; }
+        .dashboard-table th:nth-child(5) { width: 7%; }
+        .dashboard-table th:nth-child(6) { width: 9%; }
+        .dashboard-table th:nth-child(7) { width: 16%; }
+        .dashboard-table th:nth-child(8) { width: 7%; }
+        .dashboard-table th:nth-child(9) { width: 7%; }
+
+        .manage-table th:nth-child(1) { width: 18%; }
+        .manage-table th:nth-child(2) { width: 11%; }
+        .manage-table th:nth-child(3) { width: 5%; }
+        .manage-table th:nth-child(4) { width: 12%; }
+        .manage-table th:nth-child(5) { width: 7%; }
+        .manage-table th:nth-child(6) { width: 8%; }
+        .manage-table th:nth-child(7) { width: 14%; }
+        .manage-table th:nth-child(8) { width: 7%; }
+        .manage-table th:nth-child(9) { width: 7%; }
+        .manage-table th:nth-child(10) { width: 11%; }
+
         th, td {
             padding: 16px 20px;
         }
@@ -622,34 +683,24 @@
         .badge {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 999px;
             font-size: 12px;
-            font-weight: 600;
-            border: 1px solid transparent;
+            font-weight: 700;
+            white-space: nowrap;
+            line-height: 1.4;
+            letter-spacing: 0;
         }
 
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
+        .badge-ok { color: var(--status-ok); }
+        .badge-info { color: var(--status-info); }
+        .badge-warn {
+            color: var(--status-warn);
+            text-shadow: 0 0 6px rgba(245, 158, 11, 0.2);
         }
-
-        .badge-ok { background: var(--status-ok-bg); color: var(--status-ok); border-color: var(--status-ok-border); }
-        .badge-ok .badge-dot { background: var(--status-ok); }
-        
-        .badge-info { background: var(--status-info-bg); color: var(--status-info); border-color: var(--status-info-border); }
-        .badge-info .badge-dot { background: var(--status-info); }
-        
-        .badge-warn { background: var(--status-warn-bg); color: var(--status-warn); border-color: var(--status-warn-border); }
-        .badge-warn .badge-dot { background: var(--status-warn); }
-        
-        .badge-crit { background: var(--status-crit-bg); color: var(--status-crit); border-color: var(--status-crit-border); }
-        .badge-crit .badge-dot { background: var(--status-crit); }
-        
-        .badge-fail { background: var(--status-fail-bg); color: var(--text-secondary); border-color: var(--status-fail-border); }
-        .badge-fail .badge-dot { background: var(--text-secondary); }
+        .badge-crit,
+        .badge-fail {
+            color: var(--status-crit);
+            text-shadow: 0 0 7px rgba(239, 68, 68, 0.22);
+        }
 
         .days-value {
             font-weight: 700;
@@ -667,9 +718,68 @@
 
         .action-cell {
             display: flex;
-            gap: 8px;
+            gap: 6px;
             align-items: center;
+            justify-content: center;
+            white-space: nowrap;
         }
+
+        .monitor-switch {
+            position: relative;
+            flex: 0 0 42px;
+            width: 42px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 999px;
+            background: #94a3b8;
+            cursor: pointer;
+            vertical-align: middle;
+            transition: background-color 0.2s ease;
+        }
+
+        .monitor-switch.is-on { background: var(--primary-color); }
+        body.dark-mode .monitor-switch:not(.is-on) { background: #475569; }
+        .monitor-switch:hover:not(:disabled) { filter: brightness(1.08); }
+        .monitor-switch:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 3px; }
+        .monitor-switch:disabled { opacity: 0.7; cursor: wait; }
+
+        .switch-thumb {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
+            transition: transform 0.2s ease;
+        }
+
+        .monitor-switch.is-on .switch-thumb { transform: translateX(18px); }
+        .switch-spinner {
+            position: absolute;
+            top: 4px;
+            left: 13px;
+            width: 14px;
+            height: 14px;
+            color: #fff;
+        }
+
+        .domain-action-button {
+            width: 28px;
+            height: 28px;
+            min-width: 28px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .domain-action-button .action-icon { width: 14px; height: 14px; }
+        .domain-action-button.action-delete { color: var(--danger-color); }
+        .domain-action-button:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* ---------------------------------------------------------
          * 骨架屏动画
@@ -826,9 +936,7 @@
         }
 
         .modal {
-            background: var(--card-bg);
-            backdrop-filter: blur(var(--glass-blur));
-            -webkit-backdrop-filter: blur(var(--glass-blur));
+            background: #fff;
             border: 1px solid var(--card-border);
             box-shadow: var(--shadow-lg);
             border-radius: 16px;
@@ -838,6 +946,8 @@
             transform: scale(0.9) translateY(20px);
             transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
+
+        body.dark-mode .modal { background: #0f172a; }
 
         .modal-overlay.show .modal {
             transform: scale(1) translateY(0);
@@ -1017,7 +1127,7 @@
             bottom: 0;
             width: 100%;
             max-width: 440px;
-            background: var(--card-bg);
+            background: rgba(255, 255, 255, 0.96);
             backdrop-filter: blur(24px);
             -webkit-backdrop-filter: blur(24px);
             border-left: 1px solid var(--card-border);
@@ -1027,6 +1137,10 @@
             transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
             display: flex;
             flex-direction: column;
+        }
+
+        body.dark-mode .drawer {
+            background: rgba(15, 23, 42, 0.95);
         }
 
         .drawer-overlay.show .drawer {
@@ -1147,6 +1261,7 @@
             align-items: center;
             gap: 6px;
             vertical-align: middle;
+            white-space: nowrap;
         }
 
         th.sortable .sort-icon {
@@ -1241,4 +1356,7 @@
     color: var(--danger-color);
     font-size: 13px;
     line-height: 1.5;
+}
+.badge-disabled {
+    color: var(--text-secondary);
 }

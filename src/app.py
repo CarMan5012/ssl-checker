@@ -11,10 +11,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 import src.utils.config as config
-from src.utils.logger import log_info, log_ok, log_warn, log_alert, log_error
+from src.utils.logger import log_info, log_ok, log_warn, log_alert, log_error, redact_sensitive
 from src.utils.file_io import atomic_write_file
 from src.utils.cert import check_ssl
 from src.utils.domain import normalize_domain
+from src.utils.disabled import load_disabled_domains, save_disabled_domains
+from src.utils.remarks import load_domain_remarks, save_domain_remarks, normalize_remark
 
 class DynamicSecureSessionInterface(SecureCookieSessionInterface):
     def get_cookie_secure(self, app):
@@ -48,11 +50,13 @@ def handle_api_error(error):
     if not request.path.startswith('/api/'):
         if isinstance(error, HTTPException):
             return error
-        log_error(f"页面请求处理失败: {request.path}: {error}")
+        log_error("页面请求处理失败", path=request.path,
+                  error_type=type(error).__name__, reason=str(error), exc_info=True)
         return "Internal Server Error", 500
     if isinstance(error, HTTPException):
         return jsonify({"error": error.description}), error.code
-    log_error(f"API 请求处理失败: {request.method} {request.path}: {error}")
+    log_error("API 请求处理失败", method=request.method, path=request.path,
+              error_type=type(error).__name__, reason=str(error), exc_info=True)
     return jsonify({"error": "服务器处理请求失败，请查看服务日志"}), 500
 
 def init_flask_secret():
@@ -196,7 +200,7 @@ def check_authentication():
                 return jsonify({"error": "请求体必须是 JSON 对象"}), 400
             string_fields = {
                 'username', 'password', 'domain', 'old_domain', 'new_domain',
-                'domains', 'smtp_host', 'smtp_user', 'smtp_pass', 'email_to',
+                'domains', 'remark', 'smtp_host', 'smtp_user', 'smtp_pass', 'email_to',
                 'dingtalk_webhook', 'dingtalk_secret', 'dingtalk_keyword'
             }
             if any(key in payload and not isinstance(payload[key], str) for key in string_fields):
@@ -346,7 +350,7 @@ def monitor_status():
     meta = state.get('__meta__', {})
     if not isinstance(meta, dict):
         meta = {}
-    domains = set(get_domains())
+    domains = set(get_domains()) - load_disabled_domains()
     failed_count = sum(
         1 for domain in domains if isinstance(state.get(domain), dict)
         and state[domain].get('success') is False
@@ -362,6 +366,8 @@ def monitor_status():
 @app.route('/api/domains', methods=['GET'])
 def list_domains():
     domains = get_domains()
+    disabled = load_disabled_domains()
+    remarks = load_domain_remarks()
     refresh = request.args.get('refresh', 'false').lower() == 'true'
     
     # 动态热加载当前的检测阈值
@@ -375,9 +381,11 @@ def list_domains():
     to_check = []
     
     if refresh:
-        to_check = domains
+        to_check = [domain for domain in domains if domain not in disabled]
     else:
         for d in domains:
+            if d in disabled:
+                continue
             if d in state and isinstance(state[d], dict) and "success" in state[d]:
                 cached = state[d]
                 from src.utils.cert import parse_domain_and_port, get_domain_variants
@@ -398,7 +406,7 @@ def list_domains():
                     ssl_info["expire"] = cached.get("expire")
                 else:
                     ssl_info["error"] = cached.get("error")
-                result.append({"domain": d, "ssl": ssl_info})
+                result.append({"domain": d, "enabled": True, "ssl": ssl_info})
             else:
                 to_check.append(d)
                 
@@ -412,7 +420,7 @@ def list_domains():
             checked_results = executor.map(check_single, to_check)
             
         for d, ssl_info in checked_results:
-            result.append({"domain": d, "ssl": ssl_info})
+            result.append({"domain": d, "enabled": True, "ssl": ssl_info})
             if not config.TEST_MODE:
                 cache_ssl_result(state, d, ssl_info)
                 state_changed = True
@@ -421,9 +429,18 @@ def list_domains():
             if not save_state(state):
                 return jsonify({"error": "保存检测状态失败"}), 500
             
+    for domain in domains:
+        if domain in disabled:
+            result.append({"domain": domain, "enabled": False, "ssl": {
+                "success": False, "level": "已停用", "days": None,
+                "expire": None, "error": None, "ip": None, "issuer": None
+            }})
+
     # 按 websites_list.txt 中的物理顺序排序返回给前端
     domain_order = {d: i for i, d in enumerate(domains)}
     result.sort(key=lambda x: domain_order.get(x["domain"], 999))
+    for item in result:
+        item["remark"] = remarks.get(item["domain"], "")
     
     return jsonify(result)
 
@@ -464,6 +481,16 @@ def delete_domain():
     domains.remove(domain)
     if not save_domains(domains):
         return jsonify({"error": "保存域名失败"}), 500
+    disabled = load_disabled_domains()
+    if domain in disabled:
+        disabled.remove(domain)
+        if not save_disabled_domains(disabled):
+            return jsonify({"error": "域名已删除，但清理停用状态失败"}), 500
+    remarks = load_domain_remarks()
+    if domain in remarks:
+        remarks.pop(domain)
+        if not save_domain_remarks(remarks):
+            return jsonify({"error": "域名已删除，但清理备注失败"}), 500
     from src.monitor import load_state, save_state
     state = load_state()
     if domain in state:
@@ -478,6 +505,10 @@ def update_domain():
     data = request.get_json() or {}
     old_domain = data.get('old_domain', '').strip()
     new_domain = data.get('new_domain', '').strip()
+    remark_requested = 'remark' in data
+    remark = normalize_remark(data['remark']) if remark_requested else None
+    if remark_requested and remark is None:
+        return jsonify({"error": "备注不能超过 200 字，且不能包含换行或控制字符"}), 400
 
     if not old_domain or not new_domain:
         return jsonify({"error": "原域名和新域名不能为空"}), 400
@@ -494,26 +525,55 @@ def update_domain():
     if new_domain != old_domain and new_domain in domains:
         return jsonify({"error": "新域名已存在于列表中"}), 400
 
+    remarks = load_domain_remarks()
+    current_remark = remarks.get(old_domain, '')
+    next_remark = remark if remark_requested else current_remark
+    if new_domain == old_domain:
+        if next_remark != current_remark:
+            if next_remark:
+                remarks[old_domain] = next_remark
+            else:
+                remarks.pop(old_domain, None)
+            if not save_domain_remarks(remarks):
+                return jsonify({"error": "保存备注失败"}), 500
+            log_ok(f"Domain remark updated for '{old_domain}' by user '{session.get('username')}'")
+        return jsonify({"success": True, "domain": old_domain, "remark": next_remark})
+
     idx = domains.index(old_domain)
     domains[idx] = new_domain
     if not save_domains(domains):
         return jsonify({"error": "保存域名失败"}), 500
+    remarks.pop(old_domain, None)
+    if next_remark:
+        remarks[new_domain] = next_remark
+    if current_remark or next_remark:
+        if not save_domain_remarks(remarks):
+            return jsonify({"error": "域名已修改，但保存备注失败"}), 500
+    disabled = load_disabled_domains()
+    if old_domain in disabled and new_domain != old_domain:
+        disabled.remove(old_domain)
+        disabled.add(new_domain)
+        if not save_disabled_domains(disabled):
+            return jsonify({"error": "域名已修改，但保存停用状态失败"}), 500
 
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
-    ssl_info = check_ssl(new_domain, info, warn, crit)
+    ssl_info = check_ssl(new_domain, info, warn, crit) if new_domain not in disabled else {
+        "success": False, "level": "已停用", "days": None, "expire": None, "error": None
+    }
 
     # 新域名需要重新建立告警状态，不能继承原域名的通知记录。
     from src.monitor import load_state, save_state
     state = load_state()
     if new_domain != old_domain:
         state.pop(old_domain, None)
-    cache_ssl_result(state, new_domain, ssl_info)
+    if new_domain not in disabled:
+        cache_ssl_result(state, new_domain, ssl_info)
     if not config.TEST_MODE:
         if not save_state(state):
             return jsonify({"error": "保存检测状态失败"}), 500
 
     log_ok(f"Domain updated from '{old_domain}' to '{new_domain}' by user '{session.get('username')}'")
-    return jsonify({"success": True, "domain": new_domain, "ssl": ssl_info})
+    return jsonify({"success": True, "domain": new_domain, "remark": next_remark, "ssl": ssl_info})
 
 # 8. 批量域名导入
 @app.route('/api/domains/import', methods=['POST'])
@@ -557,6 +617,29 @@ def import_domains():
     })
 
 # 9. 单域名局部刷新检测
+@app.route('/api/domains/enabled', methods=['POST'])
+def set_domain_enabled():
+    data = request.get_json() or {}
+    domain, enabled = data.get('domain'), data.get('enabled')
+    if not isinstance(domain, str) or domain not in get_domains() or not isinstance(enabled, bool):
+        return jsonify({"error": "域名或启用状态无效"}), 400
+    disabled = load_disabled_domains()
+    if enabled == (domain not in disabled):
+        return jsonify({"success": True, "domain": domain, "enabled": enabled})
+    if enabled:
+        disabled.discard(domain)
+    else:
+        disabled.add(domain)
+    if not save_disabled_domains(disabled):
+        return jsonify({"error": "保存停用状态失败"}), 500
+    if enabled:
+        from src.monitor import load_state, save_state
+        state = load_state()
+        state.pop(domain, None)
+        if not save_state(state):
+            return jsonify({"error": "域名已启用，但重置检测状态失败"}), 500
+    return jsonify({"success": True, "domain": domain, "enabled": enabled})
+
 @app.route('/api/domains/check', methods=['GET'])
 def check_single_domain():
     domain = request.args.get('domain', '').strip()
@@ -564,6 +647,8 @@ def check_single_domain():
         return jsonify({"error": "域名不能为空"}), 400
     if domain not in get_domains():
         return jsonify({"error": "域名不存在"}), 404
+    if domain in load_disabled_domains():
+        return jsonify({"error": "域名已停用，请先启用"}), 409
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
     ssl_info = check_ssl(domain, info, warn, crit)
     if not config.TEST_MODE:
@@ -572,7 +657,8 @@ def check_single_domain():
         cache_ssl_result(state, domain, ssl_info)
         if not save_state(state):
             return jsonify({"error": "保存检测状态失败"}), 500
-    return jsonify({"domain": domain, "ssl": ssl_info})
+    return jsonify({"domain": domain, "enabled": True,
+                    "remark": load_domain_remarks().get(domain, ""), "ssl": ssl_info})
 
 # 10. 系统参数配置读取
 @app.route('/api/settings', methods=['GET'])
@@ -745,4 +831,7 @@ def test_settings_email():
         server.quit()
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        log_error("SMTP 测试失败", error_type=type(e).__name__,
+                  reason=redact_sensitive(str(e), extra_secrets=(password,)),
+                  smtp_host=host, smtp_port=port)
+        return jsonify({"error": "SMTP 测试失败，请检查配置与服务日志"}), 500
