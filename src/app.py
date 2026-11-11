@@ -4,7 +4,7 @@ import hashlib
 import time
 import datetime
 from datetime import timedelta
-from flask import Flask, request, jsonify, session, redirect
+from flask import Flask, request, jsonify, session, redirect, g
 from flask.sessions import SecureCookieSessionInterface
 from werkzeug.exceptions import HTTPException
 from concurrent.futures import ThreadPoolExecutor
@@ -174,6 +174,8 @@ def cache_ssl_result(state, domain, ssl_info):
 # ---------------------------------------------------------
 @app.before_request
 def check_authentication():
+    if request.path.startswith('/api/'):
+        g.api_started = time.monotonic()
     # 对 /api/ 请求进行鉴权拦截
     if request.path.startswith('/api/'):
         # 允许任何人调用的认证相关 API (不区分方法)
@@ -192,7 +194,8 @@ def check_authentication():
             is_public = True
             
         if not is_public and 'username' not in session:
-            log_warn(f"Unauthorized API request: {request.method} {request.path} from IP {request.remote_addr}")
+            log_warn("未授权 API 请求", method=request.method, path=request.path,
+                     client_ip=request.remote_addr)
             return jsonify({"error": "Unauthorized"}), 401
         if request.method in ('POST', 'PUT', 'DELETE') and request.is_json:
             payload = request.get_json(silent=True)
@@ -214,9 +217,26 @@ def check_authentication():
     if request.path == '/':
         return redirect('/dashboard')
     
-    # 审计记录 API 访问日志
+
+@app.after_request
+def log_api_response(response):
     if request.path.startswith('/api/'):
-        log_info(f"API Access: {request.method} {request.path} from IP {request.remote_addr}")
+        details = {"method": request.method, "path": request.path,
+                   "status_code": response.status_code, "client_ip": request.remote_addr,
+                   "user": session.get('username'),
+                   "duration_ms": round((time.monotonic() - g.api_started) * 1000)
+                   if hasattr(g, 'api_started') else None}
+        if request.path == '/api/domains' and request.method == 'GET':
+            details['manual_refresh'] = request.args.get('refresh', 'false').lower() == 'true'
+            if hasattr(g, 'refresh_id'):
+                details['refresh_id'] = g.refresh_id
+        if response.status_code >= 500:
+            log_error("API 请求完成", **details)
+        elif response.status_code >= 400:
+            log_warn("API 请求完成", **details)
+        else:
+            log_info("API 请求完成", **details)
+    return response
 
 # ---------------------------------------------------------
 # HTTP 页面路由映射
@@ -369,6 +389,14 @@ def list_domains():
     disabled = load_disabled_domains()
     remarks = load_domain_remarks()
     refresh = request.args.get('refresh', 'false').lower() == 'true'
+    refresh_started = time.monotonic() if refresh else None
+    refresh_id = secrets.token_hex(6) if refresh else None
+    if refresh:
+        g.refresh_id = refresh_id
+        log_info("开始手动全量刷新证书", refresh_id=refresh_id,
+                 user=session.get('username'),
+                 domain_count=len(domains), enabled_count=len(domains) - len(disabled),
+                 disabled_count=len(disabled))
     
     # 动态热加载当前的检测阈值
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
@@ -413,13 +441,25 @@ def list_domains():
     if to_check:
         # 并发线程池检测
         def check_single(d):
-            return d, check_ssl(d, info, warn, crit)
+            started = time.monotonic()
+            return d, check_ssl(d, info, warn, crit), round((time.monotonic() - started) * 1000)
             
         max_workers = min(len(to_check), 20)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             checked_results = executor.map(check_single, to_check)
             
-        for d, ssl_info in checked_results:
+        for d, ssl_info, duration_ms in checked_results:
+            if refresh:
+                details = {"refresh_id": refresh_id, "domain": d,
+                           "user": session.get('username'), "duration_ms": duration_ms,
+                           "level": ssl_info.get("level"), "ip": ssl_info.get("ip"),
+                           "issuer": ssl_info.get("issuer")}
+                if ssl_info.get("success"):
+                    log_ok("手动全量刷新域名检测完成", **details,
+                           days_remaining=ssl_info.get("days"), expire_at=ssl_info.get("expire"))
+                else:
+                    log_error("手动全量刷新域名检测失败", **details,
+                              reason=ssl_info.get("error", "未知错误"))
             result.append({"domain": d, "enabled": True, "ssl": ssl_info})
             if not config.TEST_MODE:
                 cache_ssl_result(state, d, ssl_info)
@@ -427,6 +467,9 @@ def list_domains():
                 
         if state_changed:
             if not save_state(state):
+                if refresh:
+                    log_error("手动全量刷新状态保存失败", refresh_id=refresh_id,
+                              duration_ms=round((time.monotonic() - refresh_started) * 1000))
                 return jsonify({"error": "保存检测状态失败"}), 500
             
     for domain in domains:
@@ -441,6 +484,14 @@ def list_domains():
     result.sort(key=lambda x: domain_order.get(x["domain"], 999))
     for item in result:
         item["remark"] = remarks.get(item["domain"], "")
+    if refresh:
+        failed_count = sum(not item["ssl"].get("success") for item in result if item["enabled"])
+        log_info("手动全量刷新完成", refresh_id=refresh_id,
+                 user=session.get('username'),
+                 checked_count=len(to_check), success_count=len(to_check) - failed_count,
+                 failed_count=failed_count,
+                 disabled_count=len(disabled),
+                 duration_ms=round((time.monotonic() - refresh_started) * 1000))
     
     return jsonify(result)
 
@@ -625,19 +676,27 @@ def set_domain_enabled():
         return jsonify({"error": "域名或启用状态无效"}), 400
     disabled = load_disabled_domains()
     if enabled == (domain not in disabled):
+        log_info("域名监控状态未变化", domain=domain, enabled=enabled,
+                 user=session.get('username'))
         return jsonify({"success": True, "domain": domain, "enabled": enabled})
     if enabled:
         disabled.discard(domain)
     else:
         disabled.add(domain)
     if not save_disabled_domains(disabled):
+        log_error("保存域名监控状态失败", domain=domain, enabled=enabled,
+                  user=session.get('username'))
         return jsonify({"error": "保存停用状态失败"}), 500
     if enabled:
         from src.monitor import load_state, save_state
         state = load_state()
         state.pop(domain, None)
         if not save_state(state):
+            log_error("域名已启用但重置检测状态失败", domain=domain,
+                      user=session.get('username'))
             return jsonify({"error": "域名已启用，但重置检测状态失败"}), 500
+    log_ok("域名监控状态已更新", domain=domain, enabled=enabled,
+           user=session.get('username'))
     return jsonify({"success": True, "domain": domain, "enabled": enabled})
 
 @app.route('/api/domains/check', methods=['GET'])
@@ -649,13 +708,25 @@ def check_single_domain():
         return jsonify({"error": "域名不存在"}), 404
     if domain in load_disabled_domains():
         return jsonify({"error": "域名已停用，请先启用"}), 409
+    started = time.monotonic()
+    log_info("开始手动检测域名证书", domain=domain, user=session.get('username'))
     info, warn, crit = config.ALERT_INFO_DAYS, config.ALERT_WARNING_DAYS, config.ALERT_CRITICAL_DAYS
     ssl_info = check_ssl(domain, info, warn, crit)
+    details = {"domain": domain, "duration_ms": round((time.monotonic() - started) * 1000),
+               "user": session.get('username'), "level": ssl_info.get('level'),
+               "ip": ssl_info.get('ip'), "issuer": ssl_info.get('issuer')}
+    if ssl_info.get('success'):
+        log_ok("手动检测域名证书完成", **details, days_remaining=ssl_info.get('days'),
+               expire_at=ssl_info.get('expire'))
+    else:
+        log_error("手动检测域名证书失败", **details, reason=ssl_info.get('error', '未知错误'))
     if not config.TEST_MODE:
         from src.monitor import load_state, save_state
         state = load_state()
         cache_ssl_result(state, domain, ssl_info)
         if not save_state(state):
+            log_error("手动检测结果保存失败", domain=domain,
+                      user=session.get('username'))
             return jsonify({"error": "保存检测状态失败"}), 500
     return jsonify({"domain": domain, "enabled": True,
                     "remark": load_domain_remarks().get(domain, ""), "ssl": ssl_info})

@@ -165,12 +165,12 @@
                     :class="{ 'is-on': item.enabled !== false }"
                     role="switch"
                     :aria-checked="item.enabled !== false"
-                    :disabled="singleLoadingMap[item.domain]"
+                    :disabled="switchLoadingMap[item.domain] || singleLoadingMap[item.domain]"
                     :data-tooltip="item.enabled === false ? '启用监控' : '停用监控'"
                     :aria-label="item.enabled === false ? '启用监控' : '停用监控'"
                     @click="toggleEnabled(item)"
                   >
-                    <Loader v-if="singleLoadingMap[item.domain]" class="switch-spinner spin" aria-hidden="true" />
+                    <Loader v-if="switchLoadingMap[item.domain]" class="switch-spinner spin" aria-hidden="true" />
                     <span v-else class="switch-thumb" aria-hidden="true"></span>
                   </button>
                   <button 
@@ -369,6 +369,7 @@ const handleAdd = async () => {
 
 // 域名管理列表内单个重新检测逻辑
 const singleLoadingMap = reactive({})
+const switchLoadingMap = reactive({})
 
 const refreshSingle = async (domainStr) => {
   singleLoadingMap[domainStr] = true
@@ -404,7 +405,7 @@ const refreshSingle = async (domainStr) => {
 }
 
 const toggleEnabled = async (item) => {
-  singleLoadingMap[item.domain] = true
+  switchLoadingMap[item.domain] = true
   try {
     const enabled = item.enabled === false
     const res = await apiFetch('/api/domains/enabled', {
@@ -419,7 +420,7 @@ const toggleEnabled = async (item) => {
   } catch (e) {
     showToast(`更新监控状态失败：${e.message}`, 'error')
   } finally {
-    singleLoadingMap[item.domain] = false
+    switchLoadingMap[item.domain] = false
   }
 }
 
