@@ -14,5 +14,6 @@ __pycache__
 *.pyo
 *.pyd
 *.log
+ssl-checker.tar
 .gemini
 C:\Users\Admin\.gemini\antigravity-ide
